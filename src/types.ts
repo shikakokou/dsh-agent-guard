@@ -1,4 +1,4 @@
-// 只声明本插件用到的宿主接口，不依赖 DSH 包类型。
+// Minimal host interfaces used by this plugin; no DSH package types are imported.
 
 export interface SlotRegisterOptions {
   name: string

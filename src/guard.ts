@@ -1,4 +1,4 @@
-// 与 index.js 的 Config 默认值同构。
+// Mirrors the Config defaults in index.js.
 export interface GuardConfig {
   enabled: boolean
   scope: 'team' | 'all'
@@ -10,7 +10,7 @@ export interface GuardConfig {
   stepBudget: number
 }
 
-// 设置服务暂不可用时的兜底，与 index.js DEFAULTS 一致。
+// Used until the settings service serves a value; mirrors the index.js defaults.
 export const DEFAULT_GUARD: GuardConfig = {
   enabled: true,
   scope: 'team',

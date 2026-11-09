@@ -54,7 +54,7 @@ function useFallbackConfig(props: SlotProps): GuardConfig {
   return normalizeGuard(raw)
 }
 
-// portal + fixed：避免被 composer 容器裁切，坐标随 resize/scroll 重算。
+// Portal plus fixed positioning keeps the panel outside the composer container; coordinates follow resize and scroll.
 function useAnchorPlacement(
   open: boolean,
   anchor: React.RefObject<HTMLButtonElement | null>

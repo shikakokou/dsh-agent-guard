@@ -1,16 +1,16 @@
 import z from '@deepseek-ai/schemastery'
 
-/**
- * Host 半边。启动参数在 `subagents.startActivation` 拦（spawn_teammate 与 subagent 的唯一公共入口），
- * 其余三道在执行前 `tools/pre-execute` 拦；步数从 `session/event` 的 turn/start、step/start 计。
- */
+// Host half. Subagent start options are replaced in subagents.startActivation, the
+// entry shared by spawn_teammate and the subagent tool. The other guards run in
+// tools/pre-execute. Step counts come from session/event: turn/start resets,
+// step/start increments.
 
 export const name = 'agent-guard'
 
-// 团队身份用软查询，所以只硬依赖 subagents。
+// Team membership is read through an optional service, so subagents is the only required dependency.
 export const inject = ['subagents']
 
-// 每个字段都是 volatile：设置页保存后运行时直接换值，不用重启。
+// Every field is volatile so a settings write reaches the running plugin without a restart.
 export const Config = z.object({
   enabled: z.boolean().default(true).volatile(),
   scope: z.union(['team', 'all']).default('team').volatile(),
@@ -22,7 +22,7 @@ export const Config = z.object({
   stepBudget: z.number().step(1).min(0).default(25).volatile(),
 })
 
-// 与 Config 默认值保持一致；schema 之外的调用路径（如测试）用它兜底。
+// Mirrors the Config defaults; used for a field a resolved config does not carry.
 const DEFAULTS = {
   enabled: true,
   scope: 'team',
@@ -34,7 +34,7 @@ const DEFAULTS = {
   stepBudget: 25,
 }
 
-// PowerShell 的 Start-Sleep 与 bash 的 sleep 数字都算轮询。
+// Matches PowerShell Start-Sleep and bash sleep with a numeric argument.
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
 const SPAWN_TEAMMATE = 'spawn_teammate'
 
@@ -67,7 +67,7 @@ function snapshotOf(options) {
   return Object.freeze({ ...options })
 }
 
-// 复刻 delegationDepthOf：会话头权威，运行期 subagentDepth 只能加深。
+// Mirrors delegationDepthOf: the session header wins and a runtime subagentDepth may only deepen it.
 function delegationDepth(agent) {
   try {
     const runtime = agent?.options?.subagentDepth
@@ -90,7 +90,7 @@ function isTeamLead(ctx, agent) {
   }
 }
 
-// 只算 running/provisioning；inactive 和 failed 不占名额。
+// Counts running and provisioning members; inactive and failed ones do not occupy a slot.
 function activeTeammates(ctx, lead) {
   const teams = ctx.get('agentTeams', false)
   if (teams === undefined) return 0
@@ -127,24 +127,24 @@ function refusalFor(ctx, exec, options, stepCounts) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
-  // 只拦 spawn_teammate，不动普通 subagent 工具的并发。
+  // Only spawn_teammate is capped; the subagent tool keeps its own concurrency.
   if (exec.name === SPAWN_TEAMMATE && options.maxConcurrentTeammates > 0 && isTeamLead(ctx, agent)) {
     const active = activeTeammates(ctx, agent)
     if (active >= options.maxConcurrentTeammates) {
-      ctx.logger.info('[agent-guard] 拒绝 spawn_teammate：活跃 teammate %d ≥ 上限 %d', active, options.maxConcurrentTeammates)
-      return `团队并发上限 ${options.maxConcurrentTeammates}：当前已有 ${active} 个 teammate 在跑。等它们结束再开，或把任务合并给现有 teammate。`
+      ctx.logger.info('[agent-guard] denied spawn_teammate: active %d >= limit %d', active, options.maxConcurrentTeammates)
+      return `团队并发上限 ${options.maxConcurrentTeammates}：当前已有 ${active} 个 teammate 在运行。等它们结束再新建，或把任务合并给现有 teammate。`
     }
   }
 
-  // 团队空闲时 sleep 合法（可能在等外部进程），只拦有活跃 teammate 的轮询。
+  // An idle team may sleep to wait for an external process; polling with active teammates is rejected.
   if (options.banSleepPolling === true && (exec.name === 'pwsh' || exec.name === 'bash')) {
     const command = commandOf(exec)
     if (command !== '' && SLEEP_COMMAND.test(command)) {
       const inScope = options.scope === 'all' || isTeamLead(ctx, agent)
       const teamBusy = options.scope === 'all' || activeTeammates(ctx, agent) > 0
       if (inScope && teamBusy) {
-        ctx.logger.info('[agent-guard] 拒绝 sleep 轮询：%s', command.replace(/\s+/g, ' ').slice(0, 80))
-        return '禁止用 Start-Sleep / sleep 轮询等待子 agent。它们完成会以消息唤醒你：直接结束本轮，或用 wait_agent 等待；要查进度用 list_agents / team_task_list。'
+        ctx.logger.info('[agent-guard] denied sleep polling: %s', command.replace(/\s+/g, ' ').slice(0, 80))
+        return '禁止用 Start-Sleep 或 sleep 轮询等待子 agent。子 agent 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。'
       }
     }
   }
@@ -153,8 +153,8 @@ function refusalFor(ctx, exec, options, stepCounts) {
     const sessionId = agent.session?.id
     const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
     if (used >= options.stepBudget) {
-      ctx.logger.info('[agent-guard] 子 agent %s 达到步数预算 %d', String(sessionId).slice(0, 8), options.stepBudget)
-      return `本轮工具预算已用完（${options.stepBudget} 步）。不要再调用工具：直接输出报告——已完成 / 未完成 / 下一步，由上一级决定是否继续。`
+      ctx.logger.info('[agent-guard] child %s reached the step budget %d', String(sessionId).slice(0, 8), options.stepBudget)
+      return `本轮工具预算已用完（${options.stepBudget} 步）。停止调用工具，直接输出报告：已完成、未完成、下一步，由上一级决定是否继续。`
     }
   }
 
@@ -165,7 +165,7 @@ export function apply(ctx, config = {}) {
   const subagents = ctx.subagents
   const original = subagents?.startActivation
   if (typeof original !== 'function') {
-    ctx.logger.warn('[agent-guard] subagents.startActivation 不存在，启动参数护栏未生效')
+    ctx.logger.warn('[agent-guard] subagents.startActivation is missing; start options are not overridden')
   } else {
     const guarded = async function startActivation(spec) {
       const options = resolveOptions(config)
@@ -173,14 +173,14 @@ export function apply(ctx, config = {}) {
         && (options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent))
       if (!forced) return original.call(this, spec)
       ctx.logger.info(
-        '[agent-guard] 强制子智能体启动参数 %s/%s effort=%s（scope=%s）',
+        '[agent-guard] overriding subagent start options %s/%s effort=%s scope=%s',
         options.provider, options.model, options.reasoningEffort, options.scope,
       )
       return original.call(this, { ...spec, request: forceRequest(spec.request, options) })
     }
     subagents.startActivation = guarded
     if (subagents.startActivation !== guarded) {
-      ctx.logger.warn('[agent-guard] 无法覆盖 subagents.startActivation（服务实例只读），启动参数护栏未生效')
+      ctx.logger.warn('[agent-guard] subagents.startActivation is not writable; start options are not overridden')
     } else {
       ctx.effect(() => () => {
         if (subagents.startActivation === guarded) subagents.startActivation = original
@@ -188,7 +188,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // 每轮预算在 turn/start 清零。
+  // The budget resets on turn/start.
   const stepCounts = new Map()
   ctx.on('session/event', (session, event) => {
     const id = session?.id
@@ -207,11 +207,11 @@ export function apply(ctx, config = {}) {
   }, { prepend: true })
 
   ctx.inject(['sessionProjections'], (projectionCtx) => {
-    // 投影运行时只调用 schema.parse(value)，用透传校验器即可，不必引入 schemastery。
+    // The projection runtime only calls schema.parse; the state itself carries no data.
     const passThrough = { parse: value => value }
     let cached = null
     let cachedKey = ''
-    // view 每次现读配置；值不变时复用同一引用，避免无谓发布。
+    // The view reads the live config and reuses one object while the values are unchanged.
     const liveSnapshot = () => {
       const snapshot = snapshotOf(resolveOptions(config))
       const key = JSON.stringify(snapshot)
