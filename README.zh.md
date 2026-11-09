@@ -19,13 +19,14 @@ DeepSeek Harness 插件：把 agent 的行为约束变成硬规则，并在输�
 
 **客户端半边（`src/` → `dist/client.js`）**：输入框底部（`conversation.composer.dock`）一颗 `● Guard` 按钮，
 点开浮窗显示四道约束的当前参数、范围、当前 Lead 模型；点浮窗外或按 Esc 关闭。
+浮窗里的数值来自 Host 下发的 `agentGuard` 会话投影，**不是写死的**——改 profile 配置后重启，浮窗跟着变。
 
 ## 目录
 
 ```
-index.js              Host 半边（Cordis 插件，纯 JS）
+index.js              Host 半边（Cordis 插件，纯 JS；四道约束 + `agentGuard` 投影）
 src/client.tsx        客户端入口：Guard 按钮 + 浮窗（React）
-src/guard.ts          浮窗展示的约束常量（与 index.js DEFAULTS 保持一致）
+src/guard.ts          配置类型、兜底默认值、投影值归一化、浮窗行
 src/styles.css        样式（?raw 内联进 bundle，apply 时注入 <style>）
 src/types.ts          宿主 kit / 客户端上下文的类型声明
 vite.config.ts        lib 构建 + __ModuleLoader__.load 包装
@@ -75,7 +76,7 @@ pnpm typecheck    # tsc --noEmit
     stepBudget: 25               # 子 agent 每轮最多 step 数；0 = 关闭
 ```
 
-浮窗里的 `src/guard.ts` 只用于展示，改约束时两处一起改。
+浮窗读 Host 投影，所以**只改上面这一处**：Host 用这份配置执行，浮窗展示同一份值。`src/guard.ts` 里的 `DEFAULT_GUARD` 只是投影未就绪时的兜底。
 
 ## 验证
 
@@ -92,5 +93,5 @@ Host 日志里每条拒绝/强制都会打印一行 `[agent-guard] …`。
 
 ## 后续
 
-- 浮窗接 Host 实时数据（现在两侧常量写死一致）；
-- 需要新的硬规则时往 `index.js` 的 `refusalFor` 里加一段即可。
+- 需要新的硬规则时往 `index.js` 的 `refusalFor` 里加一段，并在 `src/guard.ts` 的 `guardRows` 补一行展示；
+- 配置目前在 profile 的 `cordis.patch.yml`；要进 GUI 设置页需要给插件加 schemastery `Config` 声明。

@@ -1,7 +1,8 @@
 /** 输入框底部的 Guard 按钮与浮窗：展示四道硬约束的当前参数。 */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { GUARD, guardRows } from './guard.ts'
+import { guardRows, normalizeGuard } from './guard.ts'
+import type { GuardConfig } from './guard.ts'
 import styles from './styles.css?raw'
 import type { ClientContext, SlotProps } from './types.ts'
 
@@ -36,6 +37,13 @@ function useCurrentRoute(props: SlotProps): { route: string; model?: string } {
     ? `${current.provider} / ${current.model}`
     : '未知'
   return { route, model: current?.model }
+}
+
+/** 读 Host 下发的 `agentGuard` 投影；投影未就绪时用默认值。 */
+function useGuardConfig(props: SlotProps): GuardConfig {
+  const useProjection = props.useProjection
+  const raw = typeof useProjection === 'function' ? useProjection('agentGuard') : undefined
+  return normalizeGuard(raw)
 }
 
 /** 浮窗挂在按钮上方：按按钮矩形算 fixed 坐标，跟随窗口尺寸与滚动更新。 */
@@ -80,8 +88,9 @@ function GuardDock(props: SlotProps): React.ReactElement {
   const panel = useRef<HTMLDivElement>(null)
   const placement = useAnchorPlacement(open, anchor)
   const { route, model } = useCurrentRoute(props)
-  const rows = guardRows()
-  const leadDiffers = model !== undefined && model !== GUARD.model
+  const config = useGuardConfig(props)
+  const rows = guardRows(config)
+  const leadDiffers = model !== undefined && model !== config.model
 
   useEffect(() => {
     if (!open) return undefined
@@ -129,7 +138,7 @@ function GuardDock(props: SlotProps): React.ReactElement {
           >
             <div className="ag-head">
               <span className="ag-title">agent-guard</span>
-              <span className="ag-state">{GUARD.enabled ? '生效中' : '已停用'}</span>
+              <span className="ag-state">{config.enabled ? '生效中' : '已停用'}</span>
             </div>
             <div className="ag-sep" />
             {rows.map(row => (
@@ -143,10 +152,10 @@ function GuardDock(props: SlotProps): React.ReactElement {
               <span className="ag-value">{route}</span>
             </div>
             {leadDiffers
-              ? <div className="ag-diff">Lead 当前不是 {GUARD.model}，子智能体仍会按上面的参数启动。</div>
+              ? <div className="ag-diff">Lead 当前不是 {config.model}，子智能体仍会按上面的参数启动。</div>
               : null}
             <div className="ag-hint">
-              四道硬约束在 Host 执行：启动参数、并发上限、禁 sleep 轮询、步数预算。改配置见 profile 的 cordis.patch.yml 中 agent-guard 条目。
+              四道硬约束在 Host 执行，本浮窗读的是 Host 下发的生效配置（`agentGuard` 投影）。改配置见 profile 的 cordis.patch.yml 中 agent-guard 条目，改完重启 dsh web。
             </div>
           </div>,
           document.body

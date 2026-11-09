@@ -224,4 +224,45 @@ export function apply(ctx, config = {}) {
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
+
+  // 四、把生效配置投影给浏览器半边：浮窗直接读这份值，配置只改一处。
+  ctx.inject(['sessionProjections'], (projectionCtx) => {
+    const snapshot = Object.freeze({
+      enabled: options.enabled === true,
+      scope: options.scope === 'all' ? 'all' : 'team',
+      provider: String(options.provider),
+      model: String(options.model),
+      reasoningEffort: String(options.reasoningEffort),
+      maxConcurrentTeammates: Number.isFinite(options.maxConcurrentTeammates)
+        ? options.maxConcurrentTeammates
+        : DEFAULTS.maxConcurrentTeammates,
+      banSleepPolling: options.banSleepPolling === true,
+      stepBudget: Number.isFinite(options.stepBudget) ? options.stepBudget : DEFAULTS.stepBudget,
+    })
+    // 投影运行时只调用 schema.parse(value)；这里只需要一个透传校验器，不必引入 schemastery。
+    const passThrough = { parse: value => value }
+    projectionCtx.effect(() => projectionCtx.sessionProjections.register({
+      key: 'agentGuard',
+      // 配置一变就换版本，投影缓存里的旧值随之作废。
+      stateVersion: configVersion(snapshot),
+      stateSchema: passThrough,
+      init: () => snapshot,
+      apply: state => state,
+      wire: { viewSchema: passThrough, view: state => state },
+    }), 'agent-guard.projection()')
+  })
+}
+
+/**
+ * 由配置快照算一个稳定的非负整数版本号，用于投影缓存失效。
+ * @param snapshot - 公开配置快照。
+ * @returns 0 – 2147483646 之间的整数。
+ */
+function configVersion(snapshot) {
+  const text = JSON.stringify(snapshot)
+  let hash = 5381
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0
+  }
+  return hash % 2147483647
 }
