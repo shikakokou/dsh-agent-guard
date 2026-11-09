@@ -62,11 +62,14 @@ pnpm typecheck    # tsc --noEmit
 
 ## 配置
 
-默认值写死在 `index.js` 的 `DEFAULTS`，在 `~/.dsh/profiles/web/cordis.patch.yml` 覆盖：
+在 Web GUI 的 **设置 → 插件 → agent-guard** 卡片里改（字段来自 `index.js` 的 `Config` schema）：保存后 Host 立即用新值执行；浮窗读 Host 投影，**刷新页面**即显示新值。
+
+也可以在 `~/.dsh/profiles/web/cordis.patch.yml` 覆盖（GUI 保存的也是这里）：
 
 ```yaml
 - id: agent-guard
   config:
+    enabled: true
     scope: team                  # team（默认，只限团队模式）| all（所有 agent）
     provider: deepseek-account
     model: deepseek-flash
@@ -76,7 +79,7 @@ pnpm typecheck    # tsc --noEmit
     stepBudget: 25               # 子 agent 每轮最多 step 数；0 = 关闭
 ```
 
-浮窗读 Host 投影，所以**只改上面这一处**：Host 用这份配置执行，浮窗展示同一份值。`src/guard.ts` 里的 `DEFAULT_GUARD` 只是投影未就绪时的兜底。
+`schema` 里的默认值与 `DEFAULTS` 一致；`src/guard.ts` 的 `DEFAULT_GUARD` 只在投影未就绪时兜底。
 
 ## 验证
 

@@ -40,5 +40,8 @@
     "@types/react-dom": "^18.3.7",
     "typescript": "^6.0.3",
     "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.5"
   }
 }

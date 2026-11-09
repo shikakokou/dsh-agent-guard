@@ -1,3 +1,5 @@
+import z from '@deepseek-ai/schemastery'
+
 /**
  * Host 半边。启动参数在 `subagents.startActivation` 拦（spawn_teammate 与 subagent 的唯一公共入口），
  * 其余三道在执行前 `tools/pre-execute` 拦；步数从 `session/event` 的 turn/start、step/start 计。
@@ -8,21 +10,62 @@ export const name = 'agent-guard'
 // 团队身份用软查询，所以只硬依赖 subagents。
 export const inject = ['subagents']
 
-// profile 的 agent-guard.config 覆盖这里的默认值。
+// 每个字段都是 volatile：设置页保存后运行时直接换值，不用重启。
+export const Config = z.object({
+  enabled: z.boolean().default(true).volatile(),
+  scope: z.union(['team', 'all']).default('team').volatile(),
+  provider: z.string().default('deepseek-account').volatile(),
+  model: z.string().default('deepseek-flash').volatile(),
+  reasoningEffort: z.union(['off', 'low', 'high', 'max']).default('low').volatile(),
+  maxConcurrentTeammates: z.number().step(1).min(0).default(4).volatile(),
+  banSleepPolling: z.boolean().default(true).volatile(),
+  stepBudget: z.number().step(1).min(0).default(25).volatile(),
+})
+
+// 与 Config 默认值保持一致；schema 之外的调用路径（如测试）用它兜底。
 const DEFAULTS = {
   enabled: true,
-  scope: 'team', // team：父 agent 是 Team Lead 时生效；all：所有 agent
+  scope: 'team',
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
-  maxConcurrentTeammates: 4, // 0 = 关闭
+  maxConcurrentTeammates: 4,
   banSleepPolling: true,
-  stepBudget: 25, // 0 = 关闭
+  stepBudget: 25,
 }
 
 // PowerShell 的 Start-Sleep 与 bash 的 sleep 数字都算轮询。
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
 const SPAWN_TEAMMATE = 'spawn_teammate'
+
+function readValue(config, key, fallback) {
+  const value = config?.[key]
+  const resolved = value !== null && typeof value === 'object' && typeof value.get === 'function'
+    ? value.get()
+    : value
+  return resolved === undefined || resolved === null ? fallback : resolved
+}
+
+function countValue(value, fallback) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+function resolveOptions(config) {
+  return {
+    enabled: readValue(config, 'enabled', DEFAULTS.enabled) === true,
+    scope: readValue(config, 'scope', DEFAULTS.scope) === 'all' ? 'all' : 'team',
+    provider: String(readValue(config, 'provider', DEFAULTS.provider)),
+    model: String(readValue(config, 'model', DEFAULTS.model)),
+    reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)),
+    maxConcurrentTeammates: countValue(readValue(config, 'maxConcurrentTeammates'), DEFAULTS.maxConcurrentTeammates),
+    banSleepPolling: readValue(config, 'banSleepPolling', DEFAULTS.banSleepPolling) === true,
+    stepBudget: countValue(readValue(config, 'stepBudget'), DEFAULTS.stepBudget),
+  }
+}
+
+function snapshotOf(options) {
+  return Object.freeze({ ...options })
+}
 
 // 复刻 delegationDepthOf：会话头权威，运行期 subagentDepth 只能加深。
 function delegationDepth(agent) {
@@ -82,7 +125,7 @@ function forceRequest(request, options) {
 
 function refusalFor(ctx, exec, options, stepCounts) {
   const agent = exec?.agent
-  if (agent === undefined) return undefined
+  if (agent === undefined || options.enabled !== true) return undefined
 
   // 只拦 spawn_teammate，不动普通 subagent 工具的并发。
   if (exec.name === SPAWN_TEAMMATE && options.maxConcurrentTeammates > 0 && isTeamLead(ctx, agent)) {
@@ -119,19 +162,15 @@ function refusalFor(ctx, exec, options, stepCounts) {
 }
 
 export function apply(ctx, config = {}) {
-  const options = { ...DEFAULTS, ...config }
-  if (options.enabled !== true) {
-    ctx.logger.info('[agent-guard] 已停用')
-    return
-  }
-
   const subagents = ctx.subagents
   const original = subagents?.startActivation
   if (typeof original !== 'function') {
     ctx.logger.warn('[agent-guard] subagents.startActivation 不存在，启动参数护栏未生效')
   } else {
     const guarded = async function startActivation(spec) {
-      const forced = options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent)
+      const options = resolveOptions(config)
+      const forced = options.enabled === true
+        && (options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent))
       if (!forced) return original.call(this, spec)
       ctx.logger.info(
         '[agent-guard] 强制子智能体启动参数 %s/%s effort=%s（scope=%s）',
@@ -162,43 +201,33 @@ export function apply(ctx, config = {}) {
   })
 
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, options, stepCounts)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
 
   ctx.inject(['sessionProjections'], (projectionCtx) => {
-    const snapshot = Object.freeze({
-      enabled: options.enabled === true,
-      scope: options.scope === 'all' ? 'all' : 'team',
-      provider: String(options.provider),
-      model: String(options.model),
-      reasoningEffort: String(options.reasoningEffort),
-      maxConcurrentTeammates: Number.isFinite(options.maxConcurrentTeammates)
-        ? options.maxConcurrentTeammates
-        : DEFAULTS.maxConcurrentTeammates,
-      banSleepPolling: options.banSleepPolling === true,
-      stepBudget: Number.isFinite(options.stepBudget) ? options.stepBudget : DEFAULTS.stepBudget,
-    })
     // 投影运行时只调用 schema.parse(value)，用透传校验器即可，不必引入 schemastery。
     const passThrough = { parse: value => value }
+    let cached = null
+    let cachedKey = ''
+    // view 每次现读配置；值不变时复用同一引用，避免无谓发布。
+    const liveSnapshot = () => {
+      const snapshot = snapshotOf(resolveOptions(config))
+      const key = JSON.stringify(snapshot)
+      if (key !== cachedKey) {
+        cached = snapshot
+        cachedKey = key
+      }
+      return cached
+    }
     projectionCtx.effect(() => projectionCtx.sessionProjections.register({
       key: 'agentGuard',
-      // 配置一变版本号就变，投影缓存里的旧值随之作废。
-      stateVersion: configVersion(snapshot),
+      stateVersion: 1,
       stateSchema: passThrough,
-      init: () => snapshot,
+      init: () => ({ revision: 0 }),
       apply: state => state,
-      wire: { viewSchema: passThrough, view: state => state },
+      wire: { viewSchema: passThrough, view: liveSnapshot },
     }), 'agent-guard.projection()')
   })
-}
-
-function configVersion(snapshot) {
-  const text = JSON.stringify(snapshot)
-  let hash = 5381
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0
-  }
-  return hash % 2147483647
 }

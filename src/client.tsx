@@ -150,7 +150,7 @@ function GuardDock(props: SlotProps): React.ReactElement {
               ? <div className="ag-diff">Lead 当前不是 {config.model}，子智能体仍会按上面的参数启动。</div>
               : null}
             <div className="ag-hint">
-              四道硬约束在 Host 执行，本浮窗读的是 Host 下发的生效配置（`agentGuard` 投影）。改配置见 profile 的 cordis.patch.yml 中 agent-guard 条目，改完重启 dsh web。
+              四道硬约束在 Host 执行。配置在「设置 → 插件」的 agent-guard 卡片里改，保存后刷新页面即可看到新值。
             </div>
           </div>,
           document.body
