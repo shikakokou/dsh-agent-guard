@@ -1,0 +1,104 @@
+.ag-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-secondary, #d8dbe0);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+  font: 12px/18px ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ag-trigger:hover {
+  color: var(--dsw-alias-label-secondary, #5b6169);
+}
+
+.ag-trigger[data-open='true'] {
+  border-color: #2f9e44;
+  color: #2f9e44;
+}
+
+.ag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2f9e44;
+  display: inline-block;
+}
+
+.ag-panel {
+  position: fixed;
+  z-index: 2147483000;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-secondary, #d8dbe0);
+  background: var(--dsw-alias-bg-elevated, #ffffff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  color: var(--dsw-alias-label-primary, #1f2329);
+  font: 12px/18px ui-sans-serif, system-ui, sans-serif;
+  text-align: left;
+}
+
+.ag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ag-title {
+  font-weight: 600;
+}
+
+.ag-state {
+  color: #2f9e44;
+  font-size: 11px;
+}
+
+.ag-sep {
+  margin-top: 6px;
+  height: 1px;
+  background: var(--dsw-alias-border-secondary, #d8dbe0);
+  opacity: 0.6;
+}
+
+.ag-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 4px;
+}
+
+.ag-label {
+  flex: 0 0 auto;
+  min-width: 52px;
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+}
+
+.ag-value {
+  color: var(--dsw-alias-label-primary, #1f2329);
+  word-break: break-all;
+}
+
+.ag-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ag-diff {
+  margin-top: 6px;
+  color: var(--dsw-alias-label-secondary, #5b6169);
+}
+
+.ag-hint {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--dsw-alias-border-secondary, #d8dbe0);
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+  font-size: 11px;
+  line-height: 16px;
+}
