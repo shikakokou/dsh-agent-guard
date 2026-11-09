@@ -2,10 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 
 const PLUGIN_ID = 'dsh-agent-guard'
 
-/**
- * 把 Vite 产出的入口 chunk 包成 DSH 浏览器半边要求的注册形式：
- * `window.__ModuleLoader__.load({ id, factory })`。
- */
+// 入口 chunk 必须包成 DSH 浏览器半边的注册形式，否则 __ModuleLoader__ 不会加载它。
 function moduleLoader(): Plugin {
   return {
     name: 'dsh-module-loader',

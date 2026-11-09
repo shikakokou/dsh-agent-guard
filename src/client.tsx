@@ -1,4 +1,3 @@
-/** 输入框底部的 Guard 按钮与浮窗：展示四道硬约束的当前参数。 */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { guardRows, normalizeGuard } from './guard.ts'
@@ -10,7 +9,6 @@ const NS = 'dsh-agent-guard'
 const PANEL_WIDTH = 300
 const VIEWPORT_MARGIN = 8
 
-/** `modelSelection` 投影的客户端视图。 */
 interface ModelSelectionView {
   provider?: string
   model?: string
@@ -26,7 +24,6 @@ interface Placement {
   bottom: number
 }
 
-/** 读当前会话的模型投影；宿主没给 useProjection 时返回未知。 */
 function useCurrentRoute(props: SlotProps): { route: string; model?: string } {
   const useProjection = props.useProjection
   const selection = typeof useProjection === 'function'
@@ -39,14 +36,13 @@ function useCurrentRoute(props: SlotProps): { route: string; model?: string } {
   return { route, model: current?.model }
 }
 
-/** 读 Host 下发的 `agentGuard` 投影；投影未就绪时用默认值。 */
 function useGuardConfig(props: SlotProps): GuardConfig {
   const useProjection = props.useProjection
   const raw = typeof useProjection === 'function' ? useProjection('agentGuard') : undefined
   return normalizeGuard(raw)
 }
 
-/** 浮窗挂在按钮上方：按按钮矩形算 fixed 坐标，跟随窗口尺寸与滚动更新。 */
+// portal + fixed：避免被 composer 容器裁切，坐标随 resize/scroll 重算。
 function useAnchorPlacement(
   open: boolean,
   anchor: React.RefObject<HTMLButtonElement | null>
@@ -81,7 +77,6 @@ function useAnchorPlacement(
   return placement
 }
 
-/** 输入框底部的槽位组件。 */
 function GuardDock(props: SlotProps): React.ReactElement {
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLButtonElement>(null)

@@ -1,50 +1,30 @@
 /**
- * dsh-agent-guard · Host 半边
- *
- * 四道硬约束（全部在 Host 执行，模型想绕也绕不过）：
- * 1. 子智能体启动参数：覆盖 `subagents.startActivation` 的 agentOptions（provider/model/reasoningEffort）；
- * 2. 团队并发上限：活跃 teammate 达到上限时拒绝新的 `spawn_teammate`；
- * 3. 禁 sleep 轮询：团队有活跃成员时，拒绝 Lead 的 `Start-Sleep` / `sleep` 命令；
- * 4. 步数预算：子 agent 每轮 step 数超过预算后，拒绝它继续调用工具，逼它先报告。
- *
- * 拦截点：
- * - 启动参数 → `ctx.subagents.startActivation`（spawn_teammate / subagent 两条路径的唯一入口）；
- * - 并发、sleep、预算 → `tools/pre-execute` 瀑布（返回 `{kind:'deny'}` 即执行前拒绝）；
- * - 步数统计 → `session/event` 的 `turn/start`（清零）与 `step/start`（累加）。
+ * Host 半边。启动参数在 `subagents.startActivation` 拦（spawn_teammate 与 subagent 的唯一公共入口），
+ * 其余三道在执行前 `tools/pre-execute` 拦；步数从 `session/event` 的 turn/start、step/start 计。
  */
 
-/** Cordis plugin name。 */
 export const name = 'agent-guard'
 
-/** 本插件只依赖子智能体运行时；团队身份检测在用到时软查询。 */
+// 团队身份用软查询，所以只硬依赖 subagents。
 export const inject = ['subagents']
 
-/** 默认强制值；profile 里给 `agent-guard` 条目写 config 可覆盖。 */
+// profile 的 agent-guard.config 覆盖这里的默认值。
 const DEFAULTS = {
   enabled: true,
-  /** `team` = 只作用于团队模式（父 agent 是 Team Lead）；`all` = 所有 agent。 */
-  scope: 'team',
+  scope: 'team', // team：父 agent 是 Team Lead 时生效；all：所有 agent
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
-  /** 同时运行的 teammate 上限；0 = 关闭。 */
-  maxConcurrentTeammates: 4,
-  /** 团队有活跃成员时，拒绝 Lead 的 Start-Sleep / sleep 轮询。 */
+  maxConcurrentTeammates: 4, // 0 = 关闭
   banSleepPolling: true,
-  /** 子 agent 每轮最多 step 数，超过后拒绝工具调用；0 = 关闭。 */
-  stepBudget: 25,
+  stepBudget: 25, // 0 = 关闭
 }
 
-/** 睡眠命令：PowerShell 的 Start-Sleep，或 bash 的 `sleep 数字`。 */
+// PowerShell 的 Start-Sleep 与 bash 的 sleep 数字都算轮询。
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
-/** spawn_teammate 的 tool 名。 */
 const SPAWN_TEAMMATE = 'spawn_teammate'
 
-/**
- * agent 的委派深度，复刻 `delegationDepthOf`：取运行期 subagentDepth 与会话头 delegationDepth 的较大值。
- * @param agent - 待判定的 agent。
- * @returns 深度；读不到按 0（顶层）处理。
- */
+// 复刻 delegationDepthOf：会话头权威，运行期 subagentDepth 只能加深。
 function delegationDepth(agent) {
   try {
     const runtime = agent?.options?.subagentDepth
@@ -56,12 +36,6 @@ function delegationDepth(agent) {
   }
 }
 
-/**
- * 父 agent 是否是 Team Lead。非团队会话里 `agentTeams` 不存在，返回 false。
- * @param ctx - 插件上下文。
- * @param agent - 待判定的 agent。
- * @returns 是否以 Team Lead 身份在团队里。
- */
 function isTeamLead(ctx, agent) {
   if (agent === undefined || agent === null) return false
   const teams = ctx.get('agentTeams', false)
@@ -73,12 +47,7 @@ function isTeamLead(ctx, agent) {
   }
 }
 
-/**
- * 团队里正在运行或正在创建的 teammate 数量（不含 Lead、不含已 inactive/failed 的）。
- * @param ctx - 插件上下文。
- * @param lead - 团队 Lead。
- * @returns 活跃 teammate 数；拿不到团队服务时 0。
- */
+// 只算 running/provisioning；inactive 和 failed 不占名额。
 function activeTeammates(ctx, lead) {
   const teams = ctx.get('agentTeams', false)
   if (teams === undefined) return 0
@@ -92,11 +61,6 @@ function activeTeammates(ctx, lead) {
   }
 }
 
-/**
- * 从工具调用参数里取要执行的命令文本（pwsh / bash 的参数名是 command）。
- * @param exec - tools/pre-execute 的调用对象。
- * @returns 命令文本；取不到返回空串。
- */
 function commandOf(exec) {
   const args = exec?.arguments
   if (args === null || typeof args !== 'object') return ''
@@ -104,12 +68,6 @@ function commandOf(exec) {
   return typeof command === 'string' ? command : ''
 }
 
-/**
- * 用强制参数覆盖一次启动请求，不改调用方传进来的对象。
- * @param request - 原始 `spec.request`。
- * @param options - 归一化后的强制参数。
- * @returns 覆盖了 agentOptions 的新请求。
- */
 function forceRequest(request, options) {
   return {
     ...request,
@@ -122,19 +80,11 @@ function forceRequest(request, options) {
   }
 }
 
-/**
- * 判定一次工具调用是否要被拒绝。
- * @param ctx - 插件上下文。
- * @param exec - tools/pre-execute 的调用对象。
- * @param options - 归一化配置。
- * @param stepCounts - sessionId → 本轮已开始的 step 数。
- * @returns 拒绝原因；`undefined` 表示放行。
- */
 function refusalFor(ctx, exec, options, stepCounts) {
   const agent = exec?.agent
   if (agent === undefined) return undefined
 
-  // 1. 团队并发上限：只拦新建 teammate。
+  // 只拦 spawn_teammate，不动普通 subagent 工具的并发。
   if (exec.name === SPAWN_TEAMMATE && options.maxConcurrentTeammates > 0 && isTeamLead(ctx, agent)) {
     const active = activeTeammates(ctx, agent)
     if (active >= options.maxConcurrentTeammates) {
@@ -143,7 +93,7 @@ function refusalFor(ctx, exec, options, stepCounts) {
     }
   }
 
-  // 2. 禁 sleep 轮询：团队有活跃成员时，Lead 不许用 sleep 等子 agent。
+  // 团队空闲时 sleep 合法（可能在等外部进程），只拦有活跃 teammate 的轮询。
   if (options.banSleepPolling === true && (exec.name === 'pwsh' || exec.name === 'bash')) {
     const command = commandOf(exec)
     if (command !== '' && SLEEP_COMMAND.test(command)) {
@@ -156,7 +106,6 @@ function refusalFor(ctx, exec, options, stepCounts) {
     }
   }
 
-  // 3. 步数预算：子 agent 本轮 step 数到顶后拒绝继续调用工具，逼它先报告。
   if (options.stepBudget > 0 && delegationDepth(agent) >= 1) {
     const sessionId = agent.session?.id
     const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
@@ -169,11 +118,6 @@ function refusalFor(ctx, exec, options, stepCounts) {
   return undefined
 }
 
-/**
- * 安装四道约束。
- * @param ctx - 插件上下文。
- * @param config - 可选，覆盖 {@link DEFAULTS}。
- */
 export function apply(ctx, config = {}) {
   const options = { ...DEFAULTS, ...config }
   if (options.enabled !== true) {
@@ -181,7 +125,6 @@ export function apply(ctx, config = {}) {
     return
   }
 
-  // 一、子智能体启动参数。
   const subagents = ctx.subagents
   const original = subagents?.startActivation
   if (typeof original !== 'function') {
@@ -206,7 +149,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // 二、步数账本：每个会话在本轮已走到第几个 step。
+  // 每轮预算在 turn/start 清零。
   const stepCounts = new Map()
   ctx.on('session/event', (session, event) => {
     const id = session?.id
@@ -218,14 +161,12 @@ export function apply(ctx, config = {}) {
     if (session?.id !== undefined) stepCounts.delete(session.id)
   })
 
-  // 三、执行前护栏：并发上限、sleep 轮询、步数预算。
   ctx.on('tools/pre-execute', async (exec, next) => {
     const reason = refusalFor(ctx, exec, options, stepCounts)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
 
-  // 四、把生效配置投影给浏览器半边：浮窗直接读这份值，配置只改一处。
   ctx.inject(['sessionProjections'], (projectionCtx) => {
     const snapshot = Object.freeze({
       enabled: options.enabled === true,
@@ -239,11 +180,11 @@ export function apply(ctx, config = {}) {
       banSleepPolling: options.banSleepPolling === true,
       stepBudget: Number.isFinite(options.stepBudget) ? options.stepBudget : DEFAULTS.stepBudget,
     })
-    // 投影运行时只调用 schema.parse(value)；这里只需要一个透传校验器，不必引入 schemastery。
+    // 投影运行时只调用 schema.parse(value)，用透传校验器即可，不必引入 schemastery。
     const passThrough = { parse: value => value }
     projectionCtx.effect(() => projectionCtx.sessionProjections.register({
       key: 'agentGuard',
-      // 配置一变就换版本，投影缓存里的旧值随之作废。
+      // 配置一变版本号就变，投影缓存里的旧值随之作废。
       stateVersion: configVersion(snapshot),
       stateSchema: passThrough,
       init: () => snapshot,
@@ -253,11 +194,6 @@ export function apply(ctx, config = {}) {
   })
 }
 
-/**
- * 由配置快照算一个稳定的非负整数版本号，用于投影缓存失效。
- * @param snapshot - 公开配置快照。
- * @returns 0 – 2147483646 之间的整数。
- */
 function configVersion(snapshot) {
   const text = JSON.stringify(snapshot)
   let hash = 5381
