@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSy
 import { createPortal } from 'react-dom'
 import { normalizeGuard } from './guard.ts'
 import type { GuardConfig } from './guard.ts'
+import en from './locales/en.json'
+import zh from './locales/zh.json'
 import styles from './styles.css?raw'
-import type { ClientContext, ConfigForm, SlotProps } from './types.ts'
+import type { ClientContext, ConfigForm, SlotProps, Translate } from './types.ts'
 
 const NS = 'dsh-agent-guard'
 const ENTRY_ID = 'agent-guard'
@@ -26,7 +28,15 @@ interface Placement {
   bottom: number
 }
 
-function useCurrentRoute(props: SlotProps): { route: string; model?: string } {
+type MessageKey = '' | 'saved' | 'saveRefused'
+
+interface PanelProps extends SlotProps {
+  form: ConfigForm<GuardConfig>
+  t: Translate
+  useLocale: () => number
+}
+
+function useCurrentRoute(props: SlotProps): { route?: string; model?: string } {
   const useProjection = props.useProjection
   const selection = typeof useProjection === 'function'
     ? (useProjection('modelSelection') as ModelSelectionProjection | undefined)
@@ -34,7 +44,7 @@ function useCurrentRoute(props: SlotProps): { route: string; model?: string } {
   const current = selection?.next ?? selection?.lastUsed
   const route = current?.provider !== undefined && current?.model !== undefined
     ? `${current.provider} / ${current.model}`
-    : '未知'
+    : undefined
   return { route, model: current?.model }
 }
 
@@ -97,8 +107,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.ReactElement {
-  const { form } = props
+function GuardDock(props: PanelProps): React.ReactElement {
+  const { form, t, useLocale } = props
+  useLocale()
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
@@ -113,7 +124,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
   const stored = snapshot.value ?? fallback
   const [draft, setDraft] = useState<GuardConfig | null>(null)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
+  const [messageKey, setMessageKey] = useState<MessageKey>('')
   const current = draft ?? stored
   const editable = snapshot.status === 'ready' && snapshot.writable
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored)
@@ -122,7 +133,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
   useEffect(() => {
     if (!open) {
       setDraft(null)
-      setMessage('')
+      setMessageKey('')
     }
   }, [open])
 
@@ -148,13 +159,13 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
 
   const patch = (key: keyof GuardConfig, value: unknown): void => {
     setDraft(previous => ({ ...(previous ?? stored), [key]: value }))
-    setMessage('')
+    setMessageKey('')
   }
 
   const save = async (): Promise<void> => {
     if (draft === null || editable === false) return
     setSaving(true)
-    setMessage('')
+    setMessageKey('')
     let accepted = true
     for (const key of Object.keys(draft) as (keyof GuardConfig)[]) {
       if (JSON.stringify(draft[key]) === JSON.stringify(stored[key])) continue
@@ -163,7 +174,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
     }
     setSaving(false)
     setDraft(null)
-    setMessage(accepted ? '已保存，立即生效' : '保存被拒绝')
+    setMessageKey(accepted ? 'saved' : 'saveRefused')
   }
 
   return (
@@ -174,12 +185,12 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
         className="ag-trigger"
         data-open={open ? 'true' : 'false'}
         aria-expanded={open}
-        aria-label="agent-guard 状态与配置"
-        title="agent-guard：查看并修改 agent 行为约束"
+        aria-label={t('triggerAria')}
+        title={t('triggerTitle')}
         onClick={() => setOpen(value => !value)}
       >
         <span className="ag-dot" />
-        Guard
+        {t('trigger')}
       </button>
       {open && placement !== null
         ? createPortal(
@@ -187,16 +198,16 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
             ref={panel}
             className="ag-panel"
             role="dialog"
-            aria-label="agent-guard 配置"
+            aria-label={t('dialogAria')}
             style={{ left: placement.left, bottom: placement.bottom, width: PANEL_WIDTH }}
           >
             <div className="ag-head">
               <span className="ag-title">agent-guard</span>
-              <span className="ag-state">{current.enabled ? '生效中' : '已停用'}</span>
+              <span className="ag-state">{current.enabled ? t('stateOn') : t('stateOff')}</span>
             </div>
 
-            <Section title="总开关">
-              <Field label="启用">
+            <Section title={t('sectionSwitch')}>
+              <Field label={t('fieldEnabled')}>
                 <input
                   type="checkbox"
                   className="ag-check"
@@ -205,21 +216,21 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                   onChange={event => patch('enabled', event.target.checked)}
                 />
               </Field>
-              <Field label="作用范围">
+              <Field label={t('fieldScope')}>
                 <select
                   className="ag-select"
                   value={current.scope}
                   disabled={!editable}
                   onChange={event => patch('scope', event.target.value)}
                 >
-                  <option value="team">仅团队模式</option>
-                  <option value="all">所有 agent</option>
+                  <option value="team">{t('scopeTeam')}</option>
+                  <option value="all">{t('scopeAll')}</option>
                 </select>
               </Field>
             </Section>
 
-            <Section title="子智能体强制参数">
-              <Field label="Provider">
+            <Section title={t('sectionSubagent')}>
+              <Field label={t('fieldProvider')}>
                 <input
                   className="ag-input"
                   value={current.provider}
@@ -227,7 +238,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                   onChange={event => patch('provider', event.target.value)}
                 />
               </Field>
-              <Field label="模型">
+              <Field label={t('fieldModel')}>
                 <input
                   className="ag-input"
                   value={current.model}
@@ -235,7 +246,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                   onChange={event => patch('model', event.target.value)}
                 />
               </Field>
-              <Field label="推理强度">
+              <Field label={t('fieldEffort')}>
                 <select
                   className="ag-select"
                   value={current.reasoningEffort}
@@ -247,8 +258,8 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
               </Field>
             </Section>
 
-            <Section title="团队与预算">
-              <Field label="并发上限">
+            <Section title={t('sectionTeam')}>
+              <Field label={t('fieldConcurrency')}>
                 <span className="ag-number">
                   <input
                     type="number"
@@ -259,10 +270,10 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                     disabled={!editable}
                     onChange={event => patch('maxConcurrentTeammates', Number(event.target.value))}
                   />
-                  <span className="ag-unit">个</span>
+                  <span className="ag-unit">{t('unitCount')}</span>
                 </span>
               </Field>
-              <Field label="步数预算">
+              <Field label={t('fieldBudget')}>
                 <span className="ag-number">
                   <input
                     type="number"
@@ -273,10 +284,10 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                     disabled={!editable}
                     onChange={event => patch('stepBudget', Number(event.target.value))}
                   />
-                  <span className="ag-unit">步 / 轮</span>
+                  <span className="ag-unit">{t('unitSteps')}</span>
                 </span>
               </Field>
-              <Field label="禁止 sleep 轮询">
+              <Field label={t('fieldBanSleep')}>
                 <input
                   type="checkbox"
                   className="ag-check"
@@ -287,10 +298,10 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
               </Field>
             </Section>
 
-            <Section title="当前 Lead（只读）">
-              <div className="ag-lead">{route}</div>
+            <Section title={t('sectionLead')}>
+              <div className="ag-lead">{route ?? t('unknown')}</div>
               {leadDiffers
-                ? <div className="ag-diff">Lead 不是 {current.model}，子 agent 仍按上面的参数启动。</div>
+                ? <div className="ag-diff">{t('leadDiffers', { model: current.model })}</div>
                 : null}
             </Section>
 
@@ -301,24 +312,24 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
                 disabled={!dirty || saving || !editable}
                 onClick={() => { void save() }}
               >
-                {saving ? '保存中…' : '保存'}
+                {saving ? t('saving') : t('save')}
               </button>
               <button
                 type="button"
                 className="ag-btn"
                 disabled={!dirty || saving}
-                onClick={() => { setDraft(null); setMessage('') }}
+                onClick={() => { setDraft(null); setMessageKey('') }}
               >
-                重置
+                {t('reset')}
               </button>
-              <span className="ag-msg">{message}</span>
+              <span className="ag-msg">{messageKey === '' ? '' : t(messageKey)}</span>
             </div>
             {snapshot.status !== 'ready'
-              ? <div className="ag-status">设置服务不可用（Host 未提供 agent-guard 配置）；只能查看不能改。</div>
+              ? <div className="ag-status">{t('settingsUnavailable')}</div>
               : snapshot.writable === false
-                ? <div className="ag-status">当前配置只读。</div>
+                ? <div className="ag-status">{t('readOnly')}</div>
                 : null}
-            <div className="ag-hint">保存后立即生效（写入当前 profile 的配置）；刷新页面后读到的也是这份值。</div>
+            <div className="ag-hint">{t('hint')}</div>
           </div>,
           document.body
         )
@@ -327,7 +338,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
   )
 }
 
-export const inject = ['slots', 'configForms']
+export const inject = ['slots', 'configForms', 'locale']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
@@ -338,9 +349,16 @@ export function apply(ctx: ClientContext): void {
     return () => style.remove()
   }, 'dsh-agent-guard: styles')
 
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-agent-guard: locales')
+
+  const t = ctx.locale.bind(NS)
+  const subscribeLocale = (listener: () => void): (() => void) => ctx.locale.subscribe(listener)
+  const getLocaleRevision = (): number => ctx.locale.getSnapshot().revision
+  const useLocale = (): number => useSyncExternalStore(subscribeLocale, getLocaleRevision)
+
   const form = ctx.configForms.get<GuardConfig>(ENTRY_ID)
   ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
     { name: 'conversation.composer.dock', id: NS, order: 60 },
-    (props: SlotProps) => <GuardDock {...props} form={form} />
+    (props: SlotProps) => <GuardDock {...props} form={form} t={t} useLocale={useLocale} />
   ))
 }

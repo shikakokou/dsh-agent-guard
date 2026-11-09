@@ -27,6 +27,7 @@ DeepSeek Harness 插件：把 agent 的行为约束变成硬规则，并在输�
 index.js              Host 半边（Cordis 插件，纯 JS；四道约束 + Config schema + `agentGuard` 投影）
 src/client.tsx        客户端入口：Guard 按钮 + 可编辑浮窗（React）
 src/guard.ts          配置类型、兜底默认值、投影值归一化
+src/locales/          浮窗文案字典（zh.json / en.json）
 src/styles.css        样式（?raw 内联进 bundle，apply 时注入 <style>）
 src/types.ts          宿主 kit / configForms / 客户端上下文的类型声明
 vite.config.ts        lib 构建 + __ModuleLoader__.load 包装
@@ -80,6 +81,10 @@ pnpm typecheck    # tsc --noEmit
 ```
 
 `schema` 里的默认值与 `DEFAULTS` 一致；`src/guard.ts` 的 `DEFAULT_GUARD` 只在投影未就绪时兜底。
+
+## 多语言
+
+浮窗文案全部走 DSH 的 locale 服务（`ctx.locale`）：`apply` 里注册 `zh` / `en` 字典（`src/locales/*.json`），用 `bind(NS)` 取 `t`，并订阅 locale revision 在切换语言时重渲染——不需要刷新页面。Host 侧的拒绝原因和日志是给模型看的固定中文，不进字典。
 
 ## 验证
 
