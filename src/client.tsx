@@ -7,7 +7,7 @@ import type { ClientContext, ConfigForm, SlotProps } from './types.ts'
 
 const NS = 'dsh-agent-guard'
 const ENTRY_ID = 'agent-guard'
-const PANEL_WIDTH = 320
+const PANEL_WIDTH = 340
 const VIEWPORT_MARGIN = 8
 const REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const
 
@@ -85,6 +85,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="ag-field-label">{label}</span>
       {children}
     </label>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <section className="ag-section">
+      <div className="ag-section-title">{title}</div>
+      {children}
+    </section>
   )
 }
 
@@ -185,93 +194,105 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
               <span className="ag-title">agent-guard</span>
               <span className="ag-state">{current.enabled ? '生效中' : '已停用'}</span>
             </div>
-            <div className="ag-sep" />
 
-            <Field label="启用">
-              <input
-                type="checkbox"
-                className="ag-check"
-                checked={current.enabled}
-                disabled={!editable}
-                onChange={event => patch('enabled', event.target.checked)}
-              />
-            </Field>
-            <Field label="强制">
-              <input
-                className="ag-input"
-                value={current.provider}
-                disabled={!editable}
-                onChange={event => patch('provider', event.target.value)}
-              />
-            </Field>
-            <Field label="模型">
-              <input
-                className="ag-input"
-                value={current.model}
-                disabled={!editable}
-                onChange={event => patch('model', event.target.value)}
-              />
-            </Field>
-            <Field label="推理强度">
-              <select
-                className="ag-select"
-                value={current.reasoningEffort}
-                disabled={!editable}
-                onChange={event => patch('reasoningEffort', event.target.value)}
-              >
-                {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
-              </select>
-            </Field>
-            <Field label="范围">
-              <select
-                className="ag-select"
-                value={current.scope}
-                disabled={!editable}
-                onChange={event => patch('scope', event.target.value)}
-              >
-                <option value="team">team（仅团队）</option>
-                <option value="all">all（所有 agent）</option>
-              </select>
-            </Field>
-            <Field label="并发上限">
-              <input
-                type="number"
-                min={0}
-                step={1}
-                className="ag-input"
-                value={current.maxConcurrentTeammates}
-                disabled={!editable}
-                onChange={event => patch('maxConcurrentTeammates', Number(event.target.value))}
-              />
-            </Field>
-            <Field label="步数预算">
-              <input
-                type="number"
-                min={0}
-                step={1}
-                className="ag-input"
-                value={current.stepBudget}
-                disabled={!editable}
-                onChange={event => patch('stepBudget', Number(event.target.value))}
-              />
-            </Field>
-            <Field label="禁 sleep">
-              <input
-                type="checkbox"
-                className="ag-check"
-                checked={current.banSleepPolling}
-                disabled={!editable}
-                onChange={event => patch('banSleepPolling', event.target.checked)}
-              />
-            </Field>
+            <Section title="总开关">
+              <Field label="启用">
+                <input
+                  type="checkbox"
+                  className="ag-check"
+                  checked={current.enabled}
+                  disabled={!editable}
+                  onChange={event => patch('enabled', event.target.checked)}
+                />
+              </Field>
+              <Field label="作用范围">
+                <select
+                  className="ag-select"
+                  value={current.scope}
+                  disabled={!editable}
+                  onChange={event => patch('scope', event.target.value)}
+                >
+                  <option value="team">仅团队模式</option>
+                  <option value="all">所有 agent</option>
+                </select>
+              </Field>
+            </Section>
 
-            <div className="ag-row">
-              <span className="ag-label">当前 Lead</span>
-              <span className="ag-value">{route}</span>
-            </div>
-            {leadDiffers
-              ? <div className="ag-diff">Lead 当前不是 {current.model}，子智能体仍会按上面的参数启动。</div>
-              : null}
+            <Section title="子智能体强制参数">
+              <Field label="Provider">
+                <input
+                  className="ag-input"
+                  value={current.provider}
+                  disabled={!editable}
+                  onChange={event => patch('provider', event.target.value)}
+                />
+              </Field>
+              <Field label="模型">
+                <input
+                  className="ag-input"
+                  value={current.model}
+                  disabled={!editable}
+                  onChange={event => patch('model', event.target.value)}
+                />
+              </Field>
+              <Field label="推理强度">
+                <select
+                  className="ag-select"
+                  value={current.reasoningEffort}
+                  disabled={!editable}
+                  onChange={event => patch('reasoningEffort', event.target.value)}
+                >
+                  {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+                </select>
+              </Field>
+            </Section>
+
+            <Section title="团队与预算">
+              <Field label="并发上限">
+                <span className="ag-number">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="ag-input"
+                    value={current.maxConcurrentTeammates}
+                    disabled={!editable}
+                    onChange={event => patch('maxConcurrentTeammates', Number(event.target.value))}
+                  />
+                  <span className="ag-unit">个</span>
+                </span>
+              </Field>
+              <Field label="步数预算">
+                <span className="ag-number">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="ag-input"
+                    value={current.stepBudget}
+                    disabled={!editable}
+                    onChange={event => patch('stepBudget', Number(event.target.value))}
+                  />
+                  <span className="ag-unit">步 / 轮</span>
+                </span>
+              </Field>
+              <Field label="禁止 sleep 轮询">
+                <input
+                  type="checkbox"
+                  className="ag-check"
+                  checked={current.banSleepPolling}
+                  disabled={!editable}
+                  onChange={event => patch('banSleepPolling', event.target.checked)}
+                />
+              </Field>
+            </Section>
+
+            <Section title="当前 Lead（只读）">
+              <div className="ag-lead">{route}</div>
+              {leadDiffers
+                ? <div className="ag-diff">Lead 不是 {current.model}，子 agent 仍按上面的参数启动。</div>
+                : null}
+            </Section>
 
             <div className="ag-actions">
               <button
@@ -297,7 +318,7 @@ function GuardDock(props: SlotProps & { form: ConfigForm<GuardConfig> }): React.
               : snapshot.writable === false
                 ? <div className="ag-status">当前配置只读。</div>
                 : null}
-            <div className="ag-hint">改动写入 profile 的 cordis.patch.yml，保存后立即生效；浮窗刷新页面后显示同值。</div>
+            <div className="ag-hint">保存后立即生效（写入当前 profile 的配置）；刷新页面后读到的也是这份值。</div>
           </div>,
           document.body
         )
