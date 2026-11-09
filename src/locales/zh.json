@@ -19,7 +19,7 @@
   "fieldBanSleep": "禁止 sleep 轮询",
   "scopeTeam": "仅团队模式",
   "scopeAll": "所有 agent",
-  "unitCount": "个",
+  "unitCount": "个 teammate",
   "unitSteps": "步 / 轮",
   "unitFiles": "个文件",
   "unknown": "未知",
