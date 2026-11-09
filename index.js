@@ -134,7 +134,43 @@ function forceRequest(request, options) {
   }
 }
 
-function refusalFor(ctx, exec, options, stepCounts, filesBySession) {
+function rememberChild(childrenByParent, parentOfChild, parent, childId) {
+  const parentId = parent?.session?.id
+  if (parentId === undefined || childId === undefined) return
+  let children = childrenByParent.get(parentId)
+  if (children === undefined) {
+    children = new Set()
+    childrenByParent.set(parentId, children)
+  }
+  children.add(childId)
+  parentOfChild.set(childId, parentId)
+}
+
+function forgetChild(childrenByParent, parentOfChild, childId) {
+  if (childId === undefined) return
+  const parentId = parentOfChild.get(childId)
+  parentOfChild.delete(childId)
+  if (parentId !== undefined) {
+    const children = childrenByParent.get(parentId)
+    if (children !== undefined) {
+      children.delete(childId)
+      if (children.size === 0) childrenByParent.delete(parentId)
+    }
+    return
+  }
+  // The end edge can arrive before the start wrapper recorded the child.
+  for (const [ownerId, children] of childrenByParent) {
+    children.delete(childId)
+    if (children.size === 0) childrenByParent.delete(ownerId)
+  }
+}
+
+function activeChildCount(childrenByParent, parentId) {
+  const children = parentId === undefined ? undefined : childrenByParent.get(parentId)
+  return children === undefined ? 0 : children.size
+}
+
+function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
@@ -147,13 +183,15 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession) {
     }
   }
 
-  // An idle team may sleep to wait for an external process; polling with active teammates is rejected.
+  // An idle team may sleep to wait for an external process; a running teammate or child rejects polling.
   if (options.banSleepPolling === true && (exec.name === 'pwsh' || exec.name === 'bash')) {
     const command = commandOf(exec)
     if (command !== '' && SLEEP_COMMAND.test(command)) {
       const inScope = options.scope === 'all' || isTeamLead(ctx, agent)
-      const teamBusy = options.scope === 'all' || activeTeammates(ctx, agent) > 0
-      if (inScope && teamBusy) {
+      const busy = options.scope === 'all'
+        || activeTeammates(ctx, agent) > 0
+        || activeChildCount(childrenByParent, agent.session?.id) > 0
+      if (inScope && busy) {
         ctx.logger.info('[agent-guard] denied sleep polling: %s', command.replace(/\s+/g, ' ').slice(0, 80))
         return '禁止用 Start-Sleep 或 sleep 轮询等待子 agent。子 agent 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。'
       }
@@ -190,6 +228,8 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession) {
 }
 
 export function apply(ctx, config = {}) {
+  const childrenByParent = new Map()
+  const parentOfChild = new Map()
   const subagents = ctx.subagents
   const original = subagents?.startActivation
   if (typeof original !== 'function') {
@@ -199,12 +239,18 @@ export function apply(ctx, config = {}) {
       const options = resolveOptions(config)
       const forced = options.enabled === true
         && (options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent))
-      if (!forced) return original.call(this, spec)
-      ctx.logger.info(
-        '[agent-guard] overriding subagent start options %s/%s effort=%s scope=%s',
-        options.provider, options.model, options.reasoningEffort, options.scope,
+      if (forced) {
+        ctx.logger.info(
+          '[agent-guard] overriding subagent start options %s/%s effort=%s scope=%s',
+          options.provider, options.model, options.reasoningEffort, options.scope,
+        )
+      }
+      const activation = await original.call(
+        this,
+        forced ? { ...spec, request: forceRequest(spec.request, options) } : spec,
       )
-      return original.call(this, { ...spec, request: forceRequest(spec.request, options) })
+      rememberChild(childrenByParent, parentOfChild, spec?.request?.parent, activation?.childId)
+      return activation
     }
     subagents.startActivation = guarded
     if (subagents.startActivation !== guarded) {
@@ -215,6 +261,10 @@ export function apply(ctx, config = {}) {
       }, 'agent-guard.startActivation()')
     }
   }
+
+  ctx.on('subagent/end', (info) => {
+    forgetChild(childrenByParent, parentOfChild, info?.id)
+  })
 
   // Step and file budgets reset on turn/start.
   const stepCounts = new Map()
@@ -233,10 +283,12 @@ export function apply(ctx, config = {}) {
     if (session?.id === undefined) return
     stepCounts.delete(session.id)
     filesBySession.delete(session.id)
+    childrenByParent.delete(session.id)
+    forgetChild(childrenByParent, parentOfChild, session.id)
   })
 
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })

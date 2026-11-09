@@ -18,13 +18,13 @@ Host 侧实现在 index.js，模型无法绕过。
 | --- | --- | --- | --- |
 | 1 | 子 agent 启动参数 | ctx.subagents.startActivation | 覆盖 agentOptions 的 provider、model、reasoningEffort。spawn_teammate 与 subagent 工具共用这个入口，父 agent 传入的值被替换 |
 | 2 | teammate 并发上限 | tools/pre-execute 拦截 spawn_teammate | running 或 provisioning 状态的 teammate 数量达到上限时拒绝新建，并返回拒绝原因 |
-| 3 | 禁止 sleep 轮询 | tools/pre-execute 拦截 pwsh 与 bash | 存在活跃 teammate 时拒绝 Lead 执行 Start-Sleep 或 sleep 命令，提示改用 wait_agent 或结束本轮 |
+| 3 | 禁止 sleep 轮询 | tools/pre-execute 拦截 pwsh 与 bash | 存在活跃 teammate 或活跃子 agent 时拒绝 Lead 执行 Start-Sleep 或 sleep 命令，提示改用 wait_agent 或结束本轮 |
 | 4 | 步数预算 | tools/pre-execute 拦截全部工具，session/event 计步 | 子 agent 当前轮 step 数达到上限后拒绝继续调用工具，只能输出报告 |
 | 5 | 文件写入上限 | tools/pre-execute 拦截 write 与 edit，session/event 记文件 | 子 agent 当前轮已写入的不同文件达到上限后拒绝新的写入，重复修改同一文件不重复计数 |
 
 - 约束 1 的覆盖条件是父 agent 是 Team Lead，spawn_teammate 与 subagent 工具启动的子 agent 都覆盖。普通会话里的 subagent 调用不受影响。
 - 约束 2 只拦 spawn_teammate，不限制普通 subagent 的数量。
-- 约束 3 的判定条件是存在活跃 teammate，团队空闲时允许 sleep。
+- 约束 3 的判定条件是存在活跃 teammate 或活跃子 agent，两者都没有时允许 sleep。活跃子 agent 由 startActivation 记录、subagent/end 移除。
 - 约束 4 与约束 5 对所有子 agent 生效，计数在下一轮 turn/start 后重置。
 - 约束 5 只统计不同文件路径，拒绝发生在写入执行前；命令里写文件不受这条限制，由 sandbox 负责。
 - 子会话日志的 subagent/descriptor 记录约束 1 的 agentModel 与 agentReasoningEffort。
