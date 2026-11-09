@@ -1,4 +1,4 @@
-// 与 index.js 的 DEFAULTS 同构。
+// 与 index.js 的 Config 默认值同构。
 export interface GuardConfig {
   enabled: boolean
   scope: 'team' | 'all'
@@ -10,7 +10,7 @@ export interface GuardConfig {
   stepBudget: number
 }
 
-// Host 投影未就绪时的兜底，与 index.js DEFAULTS 一致。
+// 设置服务暂不可用时的兜底，与 index.js DEFAULTS 一致。
 export const DEFAULT_GUARD: GuardConfig = {
   enabled: true,
   scope: 'team',
@@ -20,12 +20,6 @@ export const DEFAULT_GUARD: GuardConfig = {
   maxConcurrentTeammates: 4,
   banSleepPolling: true,
   stepBudget: 25
-}
-
-export interface GuardRow {
-  readonly label: string
-  readonly value: string
-  readonly mono?: boolean
 }
 
 function count(value: unknown, fallback: number): number {
@@ -49,19 +43,4 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
     stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget)
   }
-}
-
-export function guardRows(config: GuardConfig): GuardRow[] {
-  const scope = config.scope === 'all' ? '所有 agent' : '团队模式（父 agent 是 Team Lead）'
-  return [
-    { label: '强制', value: `${config.provider} / ${config.model}`, mono: true },
-    { label: '推理强度', value: config.reasoningEffort },
-    { label: '范围', value: scope },
-    {
-      label: '并发上限',
-      value: config.maxConcurrentTeammates > 0 ? `${config.maxConcurrentTeammates} 个 teammate` : '关闭'
-    },
-    { label: 'sleep 轮询', value: config.banSleepPolling ? '禁止（团队活跃时）' : '允许' },
-    { label: '步数预算', value: config.stepBudget > 0 ? `${config.stepBudget} 步 / 轮` : '关闭' }
-  ]
 }

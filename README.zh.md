@@ -24,11 +24,11 @@ DeepSeek Harness 插件：把 agent 的行为约束变成硬规则，并在输�
 ## 目录
 
 ```
-index.js              Host 半边（Cordis 插件，纯 JS；四道约束 + `agentGuard` 投影）
-src/client.tsx        客户端入口：Guard 按钮 + 浮窗（React）
-src/guard.ts          配置类型、兜底默认值、投影值归一化、浮窗行
+index.js              Host 半边（Cordis 插件，纯 JS；四道约束 + Config schema + `agentGuard` 投影）
+src/client.tsx        客户端入口：Guard 按钮 + 可编辑浮窗（React）
+src/guard.ts          配置类型、兜底默认值、投影值归一化
 src/styles.css        样式（?raw 内联进 bundle，apply 时注入 <style>）
-src/types.ts          宿主 kit / 客户端上下文的类型声明
+src/types.ts          宿主 kit / configForms / 客户端上下文的类型声明
 vite.config.ts        lib 构建 + __ModuleLoader__.load 包装
 cordis.patch.yml      bundle 补丁（插入 agent-guard 条目）
 dist/client.js        构建产物（浏览器半边）
@@ -62,9 +62,9 @@ pnpm typecheck    # tsc --noEmit
 
 ## 配置
 
-在 Web GUI 的 **设置 → 插件 → agent-guard** 卡片里改（字段来自 `index.js` 的 `Config` schema）：保存后 Host 立即用新值执行；浮窗读 Host 投影，**刷新页面**即显示新值。
+**在浮窗里直接改**：点输入框底部的 `● Guard`，浮窗里的每个字段都可编辑（启用 / 强制 provider / 模型 / 推理强度 / 范围 / 并发上限 / 步数预算 / 禁 sleep），点「保存」写入 profile 并立即生效；重新打开或刷新页面即可看到新值。
 
-也可以在 `~/.dsh/profiles/web/cordis.patch.yml` 覆盖（GUI 保存的也是这里）：
+也可以在 `~/.dsh/profiles/web/cordis.patch.yml` 手改（浮窗保存的也是这里）：
 
 ```yaml
 - id: agent-guard
