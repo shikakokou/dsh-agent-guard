@@ -19,7 +19,7 @@
   "fieldBanSleep": "Ban sleep polling",
   "scopeTeam": "Team mode only",
   "scopeAll": "All agents",
-  "unitCount": "teammates",
+  "unitCount": "teammates / subagents",
   "unitSteps": "steps / turn",
   "unitFiles": "files",
   "unknown": "Unknown",

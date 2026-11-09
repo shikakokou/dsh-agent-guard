@@ -18,7 +18,9 @@ export const Config = z.object({
   provider: z.string().default('deepseek-account').volatile(),
   model: z.string().default('deepseek-flash').volatile(),
   reasoningEffort: z.union(['off', 'low', 'high', 'max']).default('low').volatile(),
-  maxConcurrentTeammates: z.number().step(1).min(0).default(4).volatile(),
+  maxConcurrentChildren: z.number().step(1).min(0).default(4).volatile(),
+  // Kept so a profile that still stores the old key validates; maxConcurrentChildren wins when both are set.
+  maxConcurrentTeammates: z.number().step(1).min(0).volatile(),
   banSleepPolling: z.boolean().default(true).volatile(),
   stepBudget: z.number().step(1).min(0).default(25).volatile(),
   maxFilesPerAgent: z.number().step(1).min(0).default(8).volatile(),
@@ -31,7 +33,7 @@ const DEFAULTS = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
-  maxConcurrentTeammates: 4,
+  maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
   maxFilesPerAgent: 8,
@@ -40,6 +42,8 @@ const DEFAULTS = {
 // Matches PowerShell Start-Sleep and bash sleep with a numeric argument.
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
 const SPAWN_TEAMMATE = 'spawn_teammate'
+// Delegation tools that start a child agent and share the concurrency cap.
+const CHILD_TOOLS = new Set([SPAWN_TEAMMATE, 'subagent', 'subagent_fork'])
 
 function readValue(config, key, fallback) {
   const value = config?.[key]
@@ -54,13 +58,17 @@ function countValue(value, fallback) {
 }
 
 function resolveOptions(config) {
+  const legacyConcurrent = readValue(config, 'maxConcurrentTeammates', undefined)
   return {
     enabled: readValue(config, 'enabled', DEFAULTS.enabled) === true,
     scope: readValue(config, 'scope', DEFAULTS.scope) === 'all' ? 'all' : 'team',
     provider: String(readValue(config, 'provider', DEFAULTS.provider)),
     model: String(readValue(config, 'model', DEFAULTS.model)),
     reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)),
-    maxConcurrentTeammates: countValue(readValue(config, 'maxConcurrentTeammates'), DEFAULTS.maxConcurrentTeammates),
+    maxConcurrentChildren: countValue(
+      readValue(config, 'maxConcurrentChildren', legacyConcurrent),
+      DEFAULTS.maxConcurrentChildren,
+    ),
     banSleepPolling: readValue(config, 'banSleepPolling', DEFAULTS.banSleepPolling) === true,
     stepBudget: countValue(readValue(config, 'stepBudget'), DEFAULTS.stepBudget),
     maxFilesPerAgent: countValue(readValue(config, 'maxFilesPerAgent'), DEFAULTS.maxFilesPerAgent),
@@ -106,6 +114,32 @@ function activeTeammates(ctx, lead) {
   } catch {
     return 0
   }
+}
+
+// Teammates plus plain subagent children of one parent; roster ids are excluded from the child set to avoid double counting.
+function activeConcurrent(ctx, lead, childrenByParent) {
+  const teammates = new Set()
+  const teams = ctx.get('agentTeams', false)
+  if (teams !== undefined) {
+    try {
+      for (const member of teams.listMembers(lead)) {
+        if (member.role === 'teammate' && (member.status === 'running' || member.status === 'provisioning')) {
+          teammates.add(member.id)
+        }
+      }
+    } catch {
+      // Counting falls back to the tracked child set.
+    }
+  }
+  const parentId = lead?.session?.id
+  const children = parentId === undefined ? undefined : childrenByParent.get(parentId)
+  let extra = 0
+  if (children !== undefined) {
+    for (const id of children) {
+      if (!teammates.has(id)) extra += 1
+    }
+  }
+  return teammates.size + extra
 }
 
 function commandOf(exec) {
@@ -174,12 +208,12 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
-  // Only spawn_teammate is capped; the subagent tool keeps its own concurrency.
-  if (exec.name === SPAWN_TEAMMATE && options.maxConcurrentTeammates > 0 && isTeamLead(ctx, agent)) {
-    const active = activeTeammates(ctx, agent)
-    if (active >= options.maxConcurrentTeammates) {
-      ctx.logger.info('[agent-guard] denied spawn_teammate: active %d >= limit %d', active, options.maxConcurrentTeammates)
-      return `团队并发上限 ${options.maxConcurrentTeammates}：当前已有 ${active} 个 teammate 在运行。等它们结束再新建，或把任务合并给现有 teammate。`
+  // Covers teammate and plain subagent starts; ended children leave the count.
+  if (CHILD_TOOLS.has(exec.name) && options.maxConcurrentChildren > 0 && isTeamLead(ctx, agent)) {
+    const active = activeConcurrent(ctx, agent, childrenByParent)
+    if (active >= options.maxConcurrentChildren) {
+      ctx.logger.info('[agent-guard] denied %s: active children %d >= limit %d', exec.name, active, options.maxConcurrentChildren)
+      return `并发上限 ${options.maxConcurrentChildren}：当前已有 ${active} 个 teammate 或子 agent 在运行。等它们结束再新建，或把任务合并给现有 agent。`
     }
   }
 

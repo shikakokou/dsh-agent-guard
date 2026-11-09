@@ -5,7 +5,7 @@ export interface GuardConfig {
   provider: string
   model: string
   reasoningEffort: string
-  maxConcurrentTeammates: number
+  maxConcurrentChildren: number
   banSleepPolling: boolean
   stepBudget: number
   maxFilesPerAgent: number
@@ -18,7 +18,7 @@ export const DEFAULT_GUARD: GuardConfig = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
-  maxConcurrentTeammates: 4,
+  maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
   maxFilesPerAgent: 8
@@ -41,7 +41,10 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     provider: text(value.provider, DEFAULT_GUARD.provider),
     model: text(value.model, DEFAULT_GUARD.model),
     reasoningEffort: text(value.reasoningEffort, DEFAULT_GUARD.reasoningEffort),
-    maxConcurrentTeammates: count(value.maxConcurrentTeammates, DEFAULT_GUARD.maxConcurrentTeammates),
+    maxConcurrentChildren: count(
+      value.maxConcurrentChildren ?? value.maxConcurrentTeammates,
+      DEFAULT_GUARD.maxConcurrentChildren,
+    ),
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
     stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget),
     maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent)

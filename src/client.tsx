@@ -266,9 +266,9 @@ function GuardDock(props: PanelProps): React.ReactElement {
                     min={0}
                     step={1}
                     className="ag-input"
-                    value={current.maxConcurrentTeammates}
+                    value={current.maxConcurrentChildren}
                     disabled={!editable}
-                    onChange={event => patch('maxConcurrentTeammates', Number(event.target.value))}
+                    onChange={event => patch('maxConcurrentChildren', Number(event.target.value))}
                   />
                   <span className="ag-unit">{t('unitCount')}</span>
                 </span>

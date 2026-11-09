@@ -17,13 +17,13 @@ Host 侧实现在 index.js，模型无法绕过。
 | # | 约束 | 执行位置 | 行为 |
 | --- | --- | --- | --- |
 | 1 | 子 agent 启动参数 | ctx.subagents.startActivation | 覆盖 agentOptions 的 provider、model、reasoningEffort。spawn_teammate 与 subagent 工具共用这个入口，父 agent 传入的值被替换 |
-| 2 | teammate 并发上限 | tools/pre-execute 拦截 spawn_teammate | running 或 provisioning 状态的 teammate 数量达到上限时拒绝新建，并返回拒绝原因 |
+| 2 | 并发上限 | tools/pre-execute 拦截 spawn_teammate、subagent、subagent_fork | 活跃 teammate 与活跃子 agent 的总数达到上限时拒绝新建，并返回拒绝原因 |
 | 3 | 禁止 sleep 轮询 | tools/pre-execute 拦截 pwsh 与 bash | 存在活跃 teammate 或活跃子 agent 时拒绝 Lead 执行 Start-Sleep 或 sleep 命令，提示改用 wait_agent 或结束本轮 |
 | 4 | 步数预算 | tools/pre-execute 拦截全部工具，session/event 计步 | 子 agent 当前轮 step 数达到上限后拒绝继续调用工具，只能输出报告 |
 | 5 | 文件写入上限 | tools/pre-execute 拦截 write 与 edit，session/event 记文件 | 子 agent 当前轮已写入的不同文件达到上限后拒绝新的写入，重复修改同一文件不重复计数 |
 
 - 约束 1 的覆盖条件是父 agent 是 Team Lead，spawn_teammate 与 subagent 工具启动的子 agent 都覆盖。普通会话里的 subagent 调用不受影响。
-- 约束 2 只拦 spawn_teammate，不限制普通 subagent 的数量。
+- 约束 2 统计活跃 teammate 与活跃子 agent 的总数，spawn_teammate、subagent、subagent_fork 三个入口都受限制；已结束的子 agent 不占名额。
 - 约束 3 的判定条件是存在活跃 teammate 或活跃子 agent，两者都没有时允许 sleep。活跃子 agent 由 startActivation 记录、subagent/end 移除。
 - 约束 4 与约束 5 对所有子 agent 生效，计数在下一轮 turn/start 后重置。
 - 约束 5 只统计不同文件路径，拒绝发生在写入执行前；命令里写文件不受这条限制，由 sandbox 负责。
@@ -84,13 +84,13 @@ pnpm typecheck    # tsc --noEmit
     provider: deepseek-account
     model: deepseek-flash
     reasoningEffort: low
-    maxConcurrentTeammates: 4
+    maxConcurrentChildren: 4
     banSleepPolling: true
     stepBudget: 25
     maxFilesPerAgent: 8
 ```
 
-Config schema 的默认值与 index.js 的 DEFAULTS 一致。src/guard.ts 的 DEFAULT_GUARD 只在设置服务返回前使用。
+Config schema 的默认值与 index.js 的 DEFAULTS 一致。src/guard.ts 的 DEFAULT_GUARD 只在设置服务返回前使用。旧的 `maxConcurrentTeammates` 键仍能读取，`maxConcurrentChildren` 优先。
 
 ## 多语言
 
@@ -101,7 +101,7 @@ Config schema 的默认值与 index.js 的 DEFAULTS 一致。src/guard.ts 的 DE
 重启 dsh web 后开一个团队会话。
 
 1. 启动参数：spawn_teammate 一次，子会话第 0 条 subagent/descriptor 的 agentModel 为 deepseek-flash，agentReasoningEffort 为 low。
-2. 并发上限：连续新建 5 个 teammate，第 5 个返回拒绝原因。
+2. 并发上限：连续启动 5 个 teammate 或 subagent，第 5 个返回拒绝原因；已结束的不占名额。
 3. 禁止 sleep：有 teammate 在运行时，Lead 执行 Start-Sleep -Seconds 10 被拒绝并提示改用 wait_agent；团队空闲时允许执行。
 4. 步数预算：子 agent 单轮 step 数达到 25 后，再调工具被拒绝，只能输出报告；下一轮 turn/start 后预算重置。
 5. 文件写入上限：让子 agent 连续写 9 个不同文件，第 9 个被拒绝并提示停止写文件；重复修改同一文件不占新名额，下一轮 turn/start 后重置。
