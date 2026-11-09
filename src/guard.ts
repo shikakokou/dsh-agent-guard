@@ -8,6 +8,7 @@ export interface GuardConfig {
   maxConcurrentTeammates: number
   banSleepPolling: boolean
   stepBudget: number
+  maxFilesPerAgent: number
 }
 
 // Used until the settings service serves a value; mirrors the index.js defaults.
@@ -19,7 +20,8 @@ export const DEFAULT_GUARD: GuardConfig = {
   reasoningEffort: 'low',
   maxConcurrentTeammates: 4,
   banSleepPolling: true,
-  stepBudget: 25
+  stepBudget: 25,
+  maxFilesPerAgent: 8
 }
 
 function count(value: unknown, fallback: number): number {
@@ -41,6 +43,7 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     reasoningEffort: text(value.reasoningEffort, DEFAULT_GUARD.reasoningEffort),
     maxConcurrentTeammates: count(value.maxConcurrentTeammates, DEFAULT_GUARD.maxConcurrentTeammates),
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
-    stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget)
+    stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget),
+    maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent)
   }
 }

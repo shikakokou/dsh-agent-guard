@@ -2,7 +2,7 @@
 
 DeepSeek Harness 插件。把 agent 的行为约束放到 Host 进程执行，并在输入框底部提供一个可编辑这些约束的浮窗。
 
-## 四道约束
+## 五道约束
 
 Host 侧实现在 index.js，模型无法绕过。
 
@@ -12,10 +12,12 @@ Host 侧实现在 index.js，模型无法绕过。
 | 2 | 团队并发上限 | tools/pre-execute 拦截 spawn_teammate | running 或 provisioning 状态的 teammate 数量达到上限时拒绝新建，并返回拒绝原因 |
 | 3 | 禁止 sleep 轮询 | tools/pre-execute 拦截 pwsh 与 bash | 团队有活跃成员时拒绝 Lead 执行 Start-Sleep 或 sleep 命令，提示改用 wait_agent 或结束本轮 |
 | 4 | 步数预算 | tools/pre-execute 拦截全部工具，session/event 计步 | 子 agent 当前轮 step 数达到上限后拒绝继续调用工具，只能输出报告 |
+| 5 | 文件写入上限 | tools/pre-execute 拦截 write 与 edit，session/event 记文件 | 子 agent 当前轮已写入的不同文件达到上限后拒绝新的写入，重复修改同一文件不重复计数 |
 
 - 约束 1 默认只对团队模式生效，父 agent 是 Team Lead 时才覆盖。普通会话的 subagent 调用不受影响。
 - 约束 2 与约束 3 只对团队模式生效。
-- 约束 4 对所有子 agent 生效，判定条件是 delegationDepth 大于等于 1。
+- 约束 4 与约束 5 对所有子 agent 生效，判定条件是 delegationDepth 大于等于 1，计数在下一轮 turn/start 后重置。
+- 约束 5 只统计不同文件路径，拒绝发生在写入执行前；命令里写文件不受这条限制，由 sandbox 负责。
 - 子会话日志的 subagent/descriptor 记录约束 1 的 agentModel 与 agentReasoningEffort。
 
 客户端半边由 src 构建为 dist/client.js。输入框底部有 Guard 按钮，面板可以查看并修改上述约束。面板的数值来自 Host 下发的 agentGuard 会话投影，修改配置后面板显示同一份值。
@@ -23,7 +25,7 @@ Host 侧实现在 index.js，模型无法绕过。
 ## 目录
 
 ```
-index.js              Host 半边，四道约束、Config schema 与 agentGuard 投影
+index.js              Host 半边，五道约束、Config schema 与 agentGuard 投影
 src/client.tsx        客户端入口，Guard 按钮与可编辑面板
 src/guard.ts          配置类型、默认值、投影值归一化
 src/locales/          面板文案字典，zh.json 与 en.json
@@ -61,7 +63,7 @@ pnpm typecheck    # tsc --noEmit
 
 ## 配置
 
-在浮窗里直接修改。每个字段都可编辑，包括启用、作用范围、强制 provider、模型、推理强度、并发上限、步数预算、禁止 sleep 轮询。点保存后写入 profile 并立即生效，重新打开浮窗或刷新页面显示同一份值。
+在浮窗里直接修改。每个字段都可编辑，包括启用、作用范围、强制 provider、模型、推理强度、并发上限、步数预算、文件写入上限、禁止 sleep 轮询。点保存后写入 profile 并立即生效，重新打开浮窗或刷新页面显示同一份值。
 
 也可以直接编辑 profile 的 cordis.patch.yml，浮窗保存的值写在同一处：
 
@@ -76,6 +78,7 @@ pnpm typecheck    # tsc --noEmit
     maxConcurrentTeammates: 4
     banSleepPolling: true
     stepBudget: 25
+    maxFilesPerAgent: 8
 ```
 
 Config schema 的默认值与 index.js 的 DEFAULTS 一致。src/guard.ts 的 DEFAULT_GUARD 只在设置服务返回前使用。
@@ -92,6 +95,7 @@ Config schema 的默认值与 index.js 的 DEFAULTS 一致。src/guard.ts 的 DE
 2. 并发上限：连续新建 5 个 teammate，第 5 个返回拒绝原因。
 3. 禁止 sleep：有 teammate 在运行时，Lead 执行 Start-Sleep -Seconds 10 被拒绝并提示改用 wait_agent；团队空闲时允许执行。
 4. 步数预算：子 agent 单轮 step 数达到 25 后，再调工具被拒绝，只能输出报告；下一轮 turn/start 后预算重置。
+5. 文件写入上限：让子 agent 连续写 9 个不同文件，第 9 个被拒绝并提示停止写文件；重复修改同一文件不占新名额，下一轮 turn/start 后重置。
 
 Host 日志里每条拒绝与每次覆盖都会打印一行前缀为 agent-guard 的记录。
 

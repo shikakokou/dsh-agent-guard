@@ -2,8 +2,9 @@ import z from '@deepseek-ai/schemastery'
 
 // Host half. Subagent start options are replaced in subagents.startActivation, the
 // entry shared by spawn_teammate and the subagent tool. The other guards run in
-// tools/pre-execute. Step counts come from session/event: turn/start resets,
-// step/start increments.
+// tools/pre-execute: team concurrency, sleep polling, per-turn step budget, and a
+// per-turn cap on distinct files a subagent may write. Step and file counts come
+// from session/event: turn/start resets, step/start increments.
 
 export const name = 'agent-guard'
 
@@ -20,6 +21,7 @@ export const Config = z.object({
   maxConcurrentTeammates: z.number().step(1).min(0).default(4).volatile(),
   banSleepPolling: z.boolean().default(true).volatile(),
   stepBudget: z.number().step(1).min(0).default(25).volatile(),
+  maxFilesPerAgent: z.number().step(1).min(0).default(8).volatile(),
 })
 
 // Mirrors the Config defaults; used for a field a resolved config does not carry.
@@ -32,6 +34,7 @@ const DEFAULTS = {
   maxConcurrentTeammates: 4,
   banSleepPolling: true,
   stepBudget: 25,
+  maxFilesPerAgent: 8,
 }
 
 // Matches PowerShell Start-Sleep and bash sleep with a numeric argument.
@@ -60,6 +63,7 @@ function resolveOptions(config) {
     maxConcurrentTeammates: countValue(readValue(config, 'maxConcurrentTeammates'), DEFAULTS.maxConcurrentTeammates),
     banSleepPolling: readValue(config, 'banSleepPolling', DEFAULTS.banSleepPolling) === true,
     stepBudget: countValue(readValue(config, 'stepBudget'), DEFAULTS.stepBudget),
+    maxFilesPerAgent: countValue(readValue(config, 'maxFilesPerAgent'), DEFAULTS.maxFilesPerAgent),
   }
 }
 
@@ -111,6 +115,13 @@ function commandOf(exec) {
   return typeof command === 'string' ? command : ''
 }
 
+function filePathOf(exec) {
+  const args = exec?.arguments
+  if (args === null || typeof args !== 'object') return ''
+  const path = args.file_path ?? args.filePath ?? args.path
+  return typeof path === 'string' && path !== '' ? path : ''
+}
+
 function forceRequest(request, options) {
   return {
     ...request,
@@ -123,7 +134,7 @@ function forceRequest(request, options) {
   }
 }
 
-function refusalFor(ctx, exec, options, stepCounts) {
+function refusalFor(ctx, exec, options, stepCounts, filesBySession) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
@@ -158,6 +169,23 @@ function refusalFor(ctx, exec, options, stepCounts) {
     }
   }
 
+  // Bounds a directory sweep: each subagent turn may write this many distinct files.
+  if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && (exec.name === 'write' || exec.name === 'edit')) {
+    const sessionId = agent.session?.id
+    const path = filePathOf(exec)
+    if (sessionId !== undefined && path !== '') {
+      const files = filesBySession.get(sessionId) ?? new Set()
+      if (!files.has(path)) {
+        if (files.size >= options.maxFilesPerAgent) {
+          ctx.logger.info('[agent-guard] child %s reached the file budget %d', String(sessionId).slice(0, 8), options.maxFilesPerAgent)
+          return `本轮已写 ${files.size} 个文件，达到上限 ${options.maxFilesPerAgent} 个。停止继续写文件，直接输出报告：已完成的改动和剩余项。`
+        }
+        files.add(path)
+        filesBySession.set(sessionId, files)
+      }
+    }
+  }
+
   return undefined
 }
 
@@ -188,20 +216,27 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // The budget resets on turn/start.
+  // Step and file budgets reset on turn/start.
   const stepCounts = new Map()
+  const filesBySession = new Map()
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
-    if (event.type === 'turn/start') stepCounts.set(id, 0)
-    else if (event.type === 'step/start') stepCounts.set(id, (stepCounts.get(id) ?? 0) + 1)
+    if (event.type === 'turn/start') {
+      stepCounts.set(id, 0)
+      filesBySession.delete(id)
+    } else if (event.type === 'step/start') {
+      stepCounts.set(id, (stepCounts.get(id) ?? 0) + 1)
+    }
   })
   ctx.on('session/disposed', (session) => {
-    if (session?.id !== undefined) stepCounts.delete(session.id)
+    if (session?.id === undefined) return
+    stepCounts.delete(session.id)
+    filesBySession.delete(session.id)
   })
 
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })

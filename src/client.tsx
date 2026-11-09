@@ -287,6 +287,20 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <span className="ag-unit">{t('unitSteps')}</span>
                 </span>
               </Field>
+              <Field label={t('fieldFiles')}>
+                <span className="ag-number">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="ag-input"
+                    value={current.maxFilesPerAgent}
+                    disabled={!editable}
+                    onChange={event => patch('maxFilesPerAgent', Number(event.target.value))}
+                  />
+                  <span className="ag-unit">{t('unitFiles')}</span>
+                </span>
+              </Field>
               <Field label={t('fieldBanSleep')}>
                 <input
                   type="checkbox"
