@@ -186,6 +186,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
         type="button"
         className="ag-trigger"
         data-open={open ? 'true' : 'false'}
+        data-enabled={current.enabled ? 'true' : 'false'}
         aria-expanded={open}
         aria-label={t('triggerAria')}
         title={t('triggerTitle')}
@@ -199,6 +200,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
           <div
             ref={panel}
             className="ag-panel"
+            data-enabled={current.enabled ? 'true' : 'false'}
             role="dialog"
             aria-label={t('dialogAria')}
             style={{ left: placement.left, bottom: placement.bottom, width: PANEL_WIDTH }}

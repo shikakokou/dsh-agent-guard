@@ -33,6 +33,10 @@
   display: inline-block;
 }
 
+.ag-trigger[data-enabled='false'] .ag-dot {
+  background: var(--dsw-alias-label-tertiary, #8a8f98);
+}
+
 .ag-panel {
   position: fixed;
   z-index: 2147483000;
@@ -60,6 +64,10 @@
 .ag-state {
   color: var(--dsw-alias-state-success-primary, #2f9e44);
   font-size: 11px;
+}
+
+.ag-panel[data-enabled='false'] .ag-state {
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
 }
 
 .ag-section {
