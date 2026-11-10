@@ -54,7 +54,6 @@ function useFallbackConfig(props: SlotProps): GuardConfig {
   return normalizeGuard(raw)
 }
 
-// Portal plus fixed positioning keeps the panel outside the composer container; coordinates follow resize and scroll.
 function useAnchorPlacement(
   open: boolean,
   anchor: React.RefObject<HTMLButtonElement | null>
@@ -129,6 +128,9 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const editable = snapshot.status === 'ready' && snapshot.writable
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored)
   const leadDiffers = model !== undefined && model !== current.model
+  const [effortCustom, setEffortCustom] = useState(
+    () => !REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])
+  )
 
   useEffect(() => {
     if (!open) {
@@ -247,14 +249,49 @@ function GuardDock(props: PanelProps): React.ReactElement {
                 />
               </Field>
               <Field label={t('fieldEffort')}>
-                <select
-                  className="ag-select"
-                  value={current.reasoningEffort}
-                  disabled={!editable}
-                  onChange={event => patch('reasoningEffort', event.target.value)}
-                >
-                  {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
-                </select>
+                {effortCustom ? (
+                  <span className="ag-effort-custom">
+                    <input
+                      className="ag-input"
+                      value={current.reasoningEffort}
+                      disabled={!editable}
+                      placeholder={t('effortPlaceholder')}
+                      autoFocus
+                      onChange={event => patch('reasoningEffort', event.target.value)}
+                      onKeyDown={event => { if (event.key === 'Enter') setEffortCustom(false) }}
+                    />
+                    <button
+                      type="button"
+                      className="ag-effort-presets"
+                      disabled={!editable}
+                      onClick={() => {
+                        setEffortCustom(false)
+                        if (!REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])) {
+                          patch('reasoningEffort', 'low')
+                        }
+                      }}
+                    >{t('effortPresets')}</button>
+                  </span>
+                ) : (
+                  <select
+                    className="ag-select"
+                    value={current.reasoningEffort}
+                    disabled={!editable}
+                    onChange={event => {
+                      if (event.target.value === '__custom__') {
+                        setEffortCustom(true)
+                        return
+                      }
+                      patch('reasoningEffort', event.target.value)
+                    }}
+                  >
+                    {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+                    {!REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])
+                      ? <option value={current.reasoningEffort}>{current.reasoningEffort}</option>
+                      : null}
+                    <option value="__custom__">{t('effortCustom')}</option>
+                  </select>
+                )}
               </Field>
             </Section>
 
@@ -309,6 +346,29 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   disabled={!editable}
                   onChange={event => patch('banSleepPolling', event.target.checked)}
                 />
+              </Field>
+              <Field label={t('fieldLeadWrite')}>
+                <input
+                  type="checkbox"
+                  className="ag-check"
+                  checked={current.leadNoWrite}
+                  disabled={!editable}
+                  onChange={event => patch('leadNoWrite', event.target.checked)}
+                />
+              </Field>
+              <Field label={t('fieldLeadBudget')}>
+                <span className="ag-number">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="ag-input"
+                    value={current.leadStepBudget}
+                    disabled={!editable}
+                    onChange={event => patch('leadStepBudget', Number(event.target.value))}
+                  />
+                  <span className="ag-unit">{t('unitSteps')}</span>
+                </span>
               </Field>
             </Section>
 

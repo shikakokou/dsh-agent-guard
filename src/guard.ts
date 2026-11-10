@@ -1,4 +1,3 @@
-// Mirrors the Config defaults in index.js.
 export interface GuardConfig {
   enabled: boolean
   scope: 'team' | 'all'
@@ -9,9 +8,10 @@ export interface GuardConfig {
   banSleepPolling: boolean
   stepBudget: number
   maxFilesPerAgent: number
+  leadNoWrite: boolean
+  leadStepBudget: number
 }
 
-// Used until the settings service serves a value; mirrors the index.js defaults.
 export const DEFAULT_GUARD: GuardConfig = {
   enabled: true,
   scope: 'team',
@@ -21,7 +21,9 @@ export const DEFAULT_GUARD: GuardConfig = {
   maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
-  maxFilesPerAgent: 8
+  maxFilesPerAgent: 12,
+  leadNoWrite: true,
+  leadStepBudget: 24
 }
 
 function count(value: unknown, fallback: number): number {
@@ -47,6 +49,8 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     ),
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
     stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget),
-    maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent)
+    maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent),
+    leadNoWrite: typeof value.leadNoWrite === 'boolean' ? value.leadNoWrite : DEFAULT_GUARD.leadNoWrite,
+    leadStepBudget: count(value.leadStepBudget, DEFAULT_GUARD.leadStepBudget)
   }
 }
