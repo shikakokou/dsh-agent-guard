@@ -1,4 +1,3 @@
-// Minimal host interfaces used by this plugin; no DSH package types are imported.
 
 export interface SlotRegisterOptions {
   name: string

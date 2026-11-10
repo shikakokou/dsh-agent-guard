@@ -2,7 +2,6 @@ import { defineConfig, type Plugin } from 'vite'
 
 const PLUGIN_ID = 'dsh-agent-guard'
 
-// The entry chunk must register with __ModuleLoader__, or the web client never loads it.
 function moduleLoader(): Plugin {
   return {
     name: 'dsh-module-loader',
