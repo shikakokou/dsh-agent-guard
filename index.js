@@ -141,17 +141,6 @@ function isTeamLead(ctx, agent) {
   }
 }
 
-function hasTeamWork(ctx, lead) {
-  const teams = ctx.get('agentTeams', false)
-  if (teams === undefined) return false
-  try {
-    if (teams.listMembers(lead).some(member => member.role === 'teammate')) return true
-    return teams.listTasks(lead).length > 0
-  } catch {
-    return false
-  }
-}
-
 function activeTeammates(ctx, lead) {
   const teams = ctx.get('agentTeams', false)
   if (teams === undefined) return 0
@@ -301,12 +290,8 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
     }
   }
 
-  // `scope` is the single switch for "who is in scope": `team` only acts inside a
-  // running team (a teammate on the roster or a task already opened), `all` also
-  // covers every root session — that is what stops a Lead from dodging the rules
-  // by never opening a team.
   const leadingTeam = isTeamLead(ctx, agent)
-    && (options.scope === 'all' || hasTeamWork(ctx, agent))
+    || (options.scope === 'all' && delegationDepth(agent) === 0)
   if (leadingTeam && options.leadNoWrite && LEAD_WRITE_TOOLS.has(exec.name)) {
     ctx.logger.info('[agent-guard] denied %s: team lead must delegate file writes', exec.name)
     return text('leadWrite')
