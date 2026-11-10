@@ -1,14 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 
-// Host half. Subagent start options are replaced in subagents.startActivation, the
-// entry shared by spawn_teammate and the subagent tool. The other guards run in
-// tools/pre-execute: team concurrency, sleep polling, per-turn step budget, and a
-// per-turn cap on distinct files a subagent may write. Step and file counts come
-// from session/event: turn/start resets, step/start increments.
-
 export const name = 'agent-guard'
 
-// Team membership is read through an optional service, so subagents is the only required dependency.
 export const inject = ['subagents']
 
 // Every field is volatile so a settings write reaches the running plugin without a restart.
@@ -17,16 +10,17 @@ export const Config = z.object({
   scope: z.union(['team', 'all']).default('team').volatile(),
   provider: z.string().default('deepseek-account').volatile(),
   model: z.string().default('deepseek-flash').volatile(),
-  reasoningEffort: z.union(['off', 'low', 'high', 'max']).default('low').volatile(),
+  reasoningEffort: z.string().default('low').volatile(),
   maxConcurrentChildren: z.number().step(1).min(0).default(4).volatile(),
   // Kept so a profile that still stores the old key validates; maxConcurrentChildren wins when both are set.
   maxConcurrentTeammates: z.number().step(1).min(0).volatile(),
   banSleepPolling: z.boolean().default(true).volatile(),
   stepBudget: z.number().step(1).min(0).default(25).volatile(),
-  maxFilesPerAgent: z.number().step(1).min(0).default(8).volatile(),
+  maxFilesPerAgent: z.number().step(1).min(0).default(12).volatile(),
+  leadNoWrite: z.boolean().default(true).volatile(),
+  leadStepBudget: z.number().step(1).min(0).default(24).volatile(),
 })
 
-// Mirrors the Config defaults; used for a field a resolved config does not carry.
 const DEFAULTS = {
   enabled: true,
   scope: 'team',
@@ -36,14 +30,56 @@ const DEFAULTS = {
   maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
-  maxFilesPerAgent: 8,
+  maxFilesPerAgent: 12,
+  leadNoWrite: true,
+  leadStepBudget: 24,
+}
+
+// Model-facing refusal copy. The Host has no locale service, so the language
+// follows the shared settings document's `locale` namespace (namespace `locale`,
+// field `preference`) — the same value the Web UI language row persists.
+const COPY = {
+  zh: {
+    concurrency: (limit, active) => `并发上限 ${limit}：当前已有 ${active} 个 teammate 或子 agent 在运行。等它们结束再新建，或把任务合并给现有 agent。`,
+    sleepPolling: () => '禁止用 Start-Sleep 或 sleep 轮询等待子 agent。子 agent 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。',
+    stepBudget: limit => `本轮步数预算已用完（每轮 ${limit} 步，下一轮自动重置）。本轮停止调用工具，直接输出报告：已完成、未完成、剩余项，由上一级决定下一轮怎么继续。`,
+    fileBudget: (used, limit) => `本轮已写 ${used} 个不同文件，达到每轮上限 ${limit} 个（下一轮自动重置）。本轮停止写文件，直接输出报告：已完成的改动 + 剩余文件清单，由上一级决定下一轮怎么继续。`,
+    leadWrite: () => '你是团队 Lead：不要自己改文件。把改动拆成 team_task_create，再用 send_message 把文件清单、验收标准派给 teammate 或 subagent；Lead 只做计划、复核、汇总。确实要自己动手，就先把 Guard 的「Lead 不自己改文件」关掉。',
+    leadStepBudget: limit => `本轮 Lead 步数预算已用完（每轮 ${limit} 步，下一轮自动重置）。本轮不要再调查或改代码：直接派活、汇总当前状态、结束本轮，等 teammate 回报或用户指令。`,
+  },
+  en: {
+    concurrency: (limit, active) => `Concurrency limit ${limit}: ${active} teammate/subagent(s) are already running. Wait for them to finish, or merge this work into an existing agent.`,
+    sleepPolling: () => 'Sleep polling for subagents is banned. A finished subagent wakes you with a message: end this turn, or use wait_agent; check progress with list_agents or team_task_list.',
+    stepBudget: limit => `This turn's step budget is spent (${limit} steps per turn, resets next turn). Stop calling tools and output a report: done, not done, remaining; the parent decides how to continue next turn.`,
+    fileBudget: (used, limit) => `This turn already wrote ${used} distinct files, hitting the per-turn limit of ${limit} (resets next turn). Stop writing files and output a report: completed changes plus the remaining file list; the parent decides how to continue next turn.`,
+    leadWrite: () => 'You are the Team Lead: do not edit files yourself. Split the change into team_task_create and use send_message to give a teammate or subagent the file list and acceptance criteria; the Lead plans, reviews, and summarizes. If you really must edit yourself, turn off "Lead cannot edit files" in Guard first.',
+    leadStepBudget: limit => `This turn's Lead step budget is spent (${limit} steps per turn, resets next turn). Stop investigating or coding: delegate, summarize the current state, and end this turn to wait for teammate reports or user instructions.`,
+  },
+}
+
+function readLanguagePreference(ctx) {
+  try {
+    const settings = ctx.get('settings', false)
+    const view = settings?.describe?.({ redactSecrets: true })
+      ?.namespaces?.find(namespace => namespace.ns === 'locale')
+    const preference = view?.value?.preference
+    if (typeof preference !== 'string') return undefined
+    return preference.toLowerCase().startsWith('en') ? 'en' : 'zh'
+  } catch {
+    return undefined
+  }
 }
 
 // Matches PowerShell Start-Sleep and bash sleep with a numeric argument.
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
 const SPAWN_TEAMMATE = 'spawn_teammate'
-// Delegation tools that start a child agent and share the concurrency cap.
 const CHILD_TOOLS = new Set([SPAWN_TEAMMATE, 'subagent', 'subagent_fork'])
+const LEAD_WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
+const COORDINATION_TOOLS = new Set([
+  SPAWN_TEAMMATE, 'subagent', 'subagent_fork', 'send_message', 'interrupt_agent',
+  'team_task_create', 'team_task_update', 'team_task_get', 'team_task_list',
+  'list_agents', 'wait_agent', 'ask_user_question', 'todo_write', 'present',
+])
 
 function readValue(config, key, fallback) {
   const value = config?.[key]
@@ -64,7 +100,8 @@ function resolveOptions(config) {
     scope: readValue(config, 'scope', DEFAULTS.scope) === 'all' ? 'all' : 'team',
     provider: String(readValue(config, 'provider', DEFAULTS.provider)),
     model: String(readValue(config, 'model', DEFAULTS.model)),
-    reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)),
+    reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)).trim()
+      || DEFAULTS.reasoningEffort,
     maxConcurrentChildren: countValue(
       readValue(config, 'maxConcurrentChildren', legacyConcurrent),
       DEFAULTS.maxConcurrentChildren,
@@ -72,6 +109,8 @@ function resolveOptions(config) {
     banSleepPolling: readValue(config, 'banSleepPolling', DEFAULTS.banSleepPolling) === true,
     stepBudget: countValue(readValue(config, 'stepBudget'), DEFAULTS.stepBudget),
     maxFilesPerAgent: countValue(readValue(config, 'maxFilesPerAgent'), DEFAULTS.maxFilesPerAgent),
+    leadNoWrite: readValue(config, 'leadNoWrite', DEFAULTS.leadNoWrite) === true,
+    leadStepBudget: countValue(readValue(config, 'leadStepBudget'), DEFAULTS.leadStepBudget),
   }
 }
 
@@ -102,7 +141,17 @@ function isTeamLead(ctx, agent) {
   }
 }
 
-// Counts running and provisioning members; inactive and failed ones do not occupy a slot.
+function hasTeamWork(ctx, lead) {
+  const teams = ctx.get('agentTeams', false)
+  if (teams === undefined) return false
+  try {
+    if (teams.listMembers(lead).some(member => member.role === 'teammate')) return true
+    return teams.listTasks(lead).length > 0
+  } catch {
+    return false
+  }
+}
+
 function activeTeammates(ctx, lead) {
   const teams = ctx.get('agentTeams', false)
   if (teams === undefined) return 0
@@ -116,7 +165,6 @@ function activeTeammates(ctx, lead) {
   }
 }
 
-// Teammates plus plain subagent children of one parent; roster ids are excluded from the child set to avoid double counting.
 function activeConcurrent(ctx, lead, childrenByParent) {
   const teammates = new Set()
   const teams = ctx.get('agentTeams', false)
@@ -128,7 +176,6 @@ function activeConcurrent(ctx, lead, childrenByParent) {
         }
       }
     } catch {
-      // Counting falls back to the tracked child set.
     }
   }
   const parentId = lead?.session?.id
@@ -192,7 +239,6 @@ function forgetChild(childrenByParent, parentOfChild, childId) {
     }
     return
   }
-  // The end edge can arrive before the start wrapper recorded the child.
   for (const [ownerId, children] of childrenByParent) {
     children.delete(childId)
     if (children.size === 0) childrenByParent.delete(ownerId)
@@ -204,20 +250,18 @@ function activeChildCount(childrenByParent, parentId) {
   return children === undefined ? 0 : children.size
 }
 
-function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent) {
+function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent, text) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
-  // Covers teammate and plain subagent starts; ended children leave the count.
   if (CHILD_TOOLS.has(exec.name) && options.maxConcurrentChildren > 0 && isTeamLead(ctx, agent)) {
     const active = activeConcurrent(ctx, agent, childrenByParent)
     if (active >= options.maxConcurrentChildren) {
       ctx.logger.info('[agent-guard] denied %s: active children %d >= limit %d', exec.name, active, options.maxConcurrentChildren)
-      return `并发上限 ${options.maxConcurrentChildren}：当前已有 ${active} 个 teammate 或子 agent 在运行。等它们结束再新建，或把任务合并给现有 agent。`
+      return text('concurrency', options.maxConcurrentChildren, active)
     }
   }
 
-  // An idle team may sleep to wait for an external process; a running teammate or child rejects polling.
   if (options.banSleepPolling === true && (exec.name === 'pwsh' || exec.name === 'bash')) {
     const command = commandOf(exec)
     if (command !== '' && SLEEP_COMMAND.test(command)) {
@@ -227,7 +271,7 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
         || activeChildCount(childrenByParent, agent.session?.id) > 0
       if (inScope && busy) {
         ctx.logger.info('[agent-guard] denied sleep polling: %s', command.replace(/\s+/g, ' ').slice(0, 80))
-        return '禁止用 Start-Sleep 或 sleep 轮询等待子 agent。子 agent 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。'
+        return text('sleepPolling')
       }
     }
   }
@@ -237,11 +281,10 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
     const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
     if (used >= options.stepBudget) {
       ctx.logger.info('[agent-guard] child %s reached the step budget %d', String(sessionId).slice(0, 8), options.stepBudget)
-      return `本轮工具预算已用完（${options.stepBudget} 步）。停止调用工具，直接输出报告：已完成、未完成、下一步，由上一级决定是否继续。`
+      return text('stepBudget', options.stepBudget)
     }
   }
 
-  // Bounds a directory sweep: each subagent turn may write this many distinct files.
   if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && (exec.name === 'write' || exec.name === 'edit')) {
     const sessionId = agent.session?.id
     const path = filePathOf(exec)
@@ -250,11 +293,31 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
       if (!files.has(path)) {
         if (files.size >= options.maxFilesPerAgent) {
           ctx.logger.info('[agent-guard] child %s reached the file budget %d', String(sessionId).slice(0, 8), options.maxFilesPerAgent)
-          return `本轮已写 ${files.size} 个文件，达到上限 ${options.maxFilesPerAgent} 个。停止继续写文件，直接输出报告：已完成的改动和剩余项。`
+          return text('fileBudget', files.size, options.maxFilesPerAgent)
         }
         files.add(path)
         filesBySession.set(sessionId, files)
       }
+    }
+  }
+
+  // `scope` is the single switch for "who is in scope": `team` only acts inside a
+  // running team (a teammate on the roster or a task already opened), `all` also
+  // covers every root session — that is what stops a Lead from dodging the rules
+  // by never opening a team.
+  const leadingTeam = isTeamLead(ctx, agent)
+    && (options.scope === 'all' || hasTeamWork(ctx, agent))
+  if (leadingTeam && options.leadNoWrite && LEAD_WRITE_TOOLS.has(exec.name)) {
+    ctx.logger.info('[agent-guard] denied %s: team lead must delegate file writes', exec.name)
+    return text('leadWrite')
+  }
+
+  if (leadingTeam && options.leadStepBudget > 0 && !COORDINATION_TOOLS.has(exec.name)) {
+    const sessionId = agent.session?.id
+    const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
+    if (used >= options.leadStepBudget) {
+      ctx.logger.info('[agent-guard] team lead %s reached its step budget %d', String(sessionId).slice(0, 8), options.leadStepBudget)
+      return text('leadStepBudget', options.leadStepBudget)
     }
   }
 
@@ -321,8 +384,15 @@ export function apply(ctx, config = {}) {
     forgetChild(childrenByParent, parentOfChild, session.id)
   })
 
+  const language = { value: undefined }
+  const text = (key, ...args) => {
+    if (language.value === undefined) language.value = readLanguagePreference(ctx) ?? 'zh'
+    return COPY[language.value][key](...args)
+  }
+  ctx.on('settings/document-updated', () => { language.value = undefined })
+
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent, text)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
@@ -332,7 +402,6 @@ export function apply(ctx, config = {}) {
     const passThrough = { parse: value => value }
     let cached = null
     let cachedKey = ''
-    // The view reads the live config and reuses one object while the values are unchanged.
     const liveSnapshot = () => {
       const snapshot = snapshotOf(resolveOptions(config))
       const key = JSON.stringify(snapshot)
