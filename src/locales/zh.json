@@ -36,6 +36,6 @@
   "saveRefused": "保存被拒绝",
   "settingsUnavailable": "设置服务不可用（Host 未提供 agent-guard 配置）；只能查看不能改。",
   "readOnly": "当前配置只读。",
-  "hint": "保存后立即生效（写入当前 profile 的配置）；刷新页面后读到的也是这份值。",
+  "hint": "保存后立即生效。",
   "dialogAria": "agent-guard 配置"
 }

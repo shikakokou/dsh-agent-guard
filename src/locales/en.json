@@ -36,6 +36,6 @@
   "saveRefused": "Save was refused",
   "settingsUnavailable": "Settings are unavailable (the Host does not serve agent-guard); view only.",
   "readOnly": "This configuration is read-only.",
-  "hint": "Applied immediately after save (writes to the current profile); a page refresh shows the same values.",
+  "hint": "Applied as soon as you save.",
   "dialogAria": "agent-guard settings"
 }
