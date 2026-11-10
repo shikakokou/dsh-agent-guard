@@ -431,8 +431,8 @@ export function apply(ctx: ClientContext): void {
   const useLocale = (): number => useSyncExternalStore(subscribeLocale, getLocaleRevision)
 
   const form = ctx.configForms.get<GuardConfig>(ENTRY_ID)
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
-    { name: 'conversation.composer.dock', id: NS, order: 60 },
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register(
+    { name: 'conversation.input.left', id: NS, order: 40 },
     (props: SlotProps) => <GuardDock {...props} form={form} t={t} useLocale={useLocale} />
   ))
 }
