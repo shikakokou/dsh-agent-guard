@@ -272,13 +272,15 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
   if (options.stepBudget > 0 && delegationDepth(agent) >= 1) {
     const sessionId = agent.session?.id
     const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
-    if (used >= options.stepBudget) {
+    // step/start already counted the current step, so N steps are allowed and the (N + 1)-th tool call is refused.
+    if (used > options.stepBudget) {
       ctx.logger.info('[agent-guard] child %s reached the step budget %d', String(sessionId).slice(0, 8), options.stepBudget)
       return text('stepBudget', options.stepBudget)
     }
   }
 
-  if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && (exec.name === 'write' || exec.name === 'edit')) {
+  // Every file-writing tool counts: write, edit, and str_replace_editor (whose `path` argument filePathOf handles).
+  if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && LEAD_WRITE_TOOLS.has(exec.name)) {
     const sessionId = agent.session?.id
     const path = filePathOf(exec)
     if (sessionId !== undefined && path !== '') {
@@ -304,7 +306,8 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
   if (leadingTeam && options.leadStepBudget > 0 && !COORDINATION_TOOLS.has(exec.name)) {
     const sessionId = agent.session?.id
     const used = sessionId === undefined ? 0 : (stepCounts.get(sessionId) ?? 0)
-    if (used >= options.leadStepBudget) {
+    // Same boundary as stepBudget: N steps may run, the (N + 1)-th non-coordination call is refused.
+    if (used > options.leadStepBudget) {
       ctx.logger.info('[agent-guard] team lead %s reached its step budget %d', String(sessionId).slice(0, 8), options.leadStepBudget)
       return text('leadStepBudget', options.leadStepBudget)
     }
