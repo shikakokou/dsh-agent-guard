@@ -4,13 +4,14 @@ import { normalizeGuard } from './guard.ts'
 import type { GuardConfig } from './guard.ts'
 import en from './locales/en.json'
 import zh from './locales/zh.json'
+import { computePlacement } from './placement.ts'
+import type { Placement } from './placement.ts'
 import styles from './styles.css?raw'
 import type { ClientContext, ConfigForm, SlotProps, Translate } from './types.ts'
 
 const NS = 'dsh-agent-guard'
 const ENTRY_ID = 'agent-guard'
 const PANEL_WIDTH = 340
-const VIEWPORT_MARGIN = 8
 const REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const
 
 interface ModelSelectionView {
@@ -21,11 +22,6 @@ interface ModelSelectionView {
 interface ModelSelectionProjection {
   next?: ModelSelectionView
   lastUsed?: ModelSelectionView
-}
-
-interface Placement {
-  left: number
-  bottom: number
 }
 
 type MessageKey = '' | 'saved' | 'saveRefused'
@@ -56,34 +52,59 @@ function useFallbackConfig(props: SlotProps): GuardConfig {
 
 function useAnchorPlacement(
   open: boolean,
-  anchor: React.RefObject<HTMLButtonElement | null>
+  anchor: React.RefObject<HTMLButtonElement | null>,
+  panel: React.RefObject<HTMLDivElement | null>
 ): Placement | null {
   const [placement, setPlacement] = useState<Placement | null>(null)
 
-  const measure = useCallback(() => {
-    const element = anchor.current
-    if (element === null) return
-    const rect = element.getBoundingClientRect()
-    const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN)
-    setPlacement({
-      left: Math.min(Math.max(rect.left, VIEWPORT_MARGIN), maxLeft),
-      bottom: Math.max(window.innerHeight - rect.top + 8, VIEWPORT_MARGIN)
-    })
-  }, [anchor])
-
+  // The panel portals to body and sizes itself from content, so measure the
+  // natural height (visible part plus every child's hidden overflow) and let
+  // computePlacement cap it: the panel then scrolls its body instead of
+  // growing past the window edge.
   useLayoutEffect(() => {
-    if (open) measure()
-  }, [open, measure])
-
-  useEffect(() => {
-    if (!open) return undefined
-    window.addEventListener('resize', measure)
-    window.addEventListener('scroll', measure, true)
-    return () => {
-      window.removeEventListener('resize', measure)
-      window.removeEventListener('scroll', measure, true)
+    if (!open) {
+      setPlacement(null)
+      return undefined
     }
-  }, [open, measure])
+    const place = (): void => {
+      const element = panel.current
+      const trigger = anchor.current
+      if (element === null || trigger === null) return
+      const rect = trigger.getBoundingClientRect()
+      let height = element.offsetHeight
+      for (const child of Array.from(element.children)) {
+        if (!(child instanceof HTMLElement)) continue
+        height += Math.max(0, child.scrollHeight - child.clientHeight)
+      }
+      const next = computePlacement(
+        { left: rect.left, top: rect.top, bottom: rect.bottom, right: rect.right },
+        { width: element.offsetWidth || PANEL_WIDTH, height },
+        { width: window.innerWidth, height: window.innerHeight }
+      )
+      setPlacement(current =>
+        current !== null &&
+        current.left === next.left &&
+        current.top === next.top &&
+        current.maxHeight === next.maxHeight
+          ? current
+          : next
+      )
+    }
+    place()
+    const onScroll = (event: Event): void => {
+      if (event.target instanceof Node && panel.current?.contains(event.target) === true) return
+      place()
+    }
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', onScroll, true)
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null
+    if (panel.current !== null) observer?.observe(panel.current)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', onScroll, true)
+      observer?.disconnect()
+    }
+  }, [open, anchor, panel])
 
   return placement
 }
@@ -112,7 +133,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
-  const placement = useAnchorPlacement(open, anchor)
+  const placement = useAnchorPlacement(open, anchor, panel)
   const { route, model } = useCurrentRoute(props)
   const fallback = useFallbackConfig(props)
 
@@ -195,7 +216,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
         <span className="ag-dot" />
         {t('trigger')}
       </button>
-      {open && placement !== null
+      {open
         ? createPortal(
           <div
             ref={panel}
@@ -203,13 +224,16 @@ function GuardDock(props: PanelProps): React.ReactElement {
             data-enabled={current.enabled ? 'true' : 'false'}
             role="dialog"
             aria-label={t('dialogAria')}
-            style={{ left: placement.left, bottom: placement.bottom, width: PANEL_WIDTH }}
+            style={placement === null
+              ? { left: 0, top: 0, width: PANEL_WIDTH, visibility: 'hidden' }
+              : { left: placement.left, top: placement.top, maxHeight: placement.maxHeight, width: PANEL_WIDTH }}
           >
             <div className="ag-head">
               <span className="ag-title">agent-guard</span>
               <span className="ag-state">{current.enabled ? t('stateOn') : t('stateOff')}</span>
             </div>
 
+            <div className="ag-body">
             <Section title={t('sectionSwitch')}>
               <Field label={t('fieldEnabled')}>
                 <input
@@ -234,11 +258,21 @@ function GuardDock(props: PanelProps): React.ReactElement {
             </Section>
 
             <Section title={t('sectionSubagent')}>
+              <div className="ag-note">{t('sectionSubagentHint')}</div>
+              <Field label={t('fieldInheritLead')}>
+                <input
+                  type="checkbox"
+                  className="ag-check"
+                  checked={current.inheritLeadConfig}
+                  disabled={!editable}
+                  onChange={event => patch('inheritLeadConfig', event.target.checked)}
+                />
+              </Field>
               <Field label={t('fieldProvider')}>
                 <input
                   className="ag-input"
                   value={current.provider}
-                  disabled={!editable}
+                  disabled={!editable || current.inheritLeadConfig}
                   onChange={event => patch('provider', event.target.value)}
                 />
               </Field>
@@ -246,7 +280,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                 <input
                   className="ag-input"
                   value={current.model}
-                  disabled={!editable}
+                  disabled={!editable || current.inheritLeadConfig}
                   onChange={event => patch('model', event.target.value)}
                 />
               </Field>
@@ -256,7 +290,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                     <input
                       className="ag-input"
                       value={current.reasoningEffort}
-                      disabled={!editable}
+                      disabled={!editable || current.inheritLeadConfig}
                       placeholder={t('effortPlaceholder')}
                       autoFocus
                       onChange={event => patch('reasoningEffort', event.target.value)}
@@ -265,7 +299,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                     <button
                       type="button"
                       className="ag-effort-presets"
-                      disabled={!editable}
+                      disabled={!editable || current.inheritLeadConfig}
                       onClick={() => {
                         setEffortCustom(false)
                         if (!REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])) {
@@ -278,7 +312,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <select
                     className="ag-select"
                     value={current.reasoningEffort}
-                    disabled={!editable}
+                    disabled={!editable || current.inheritLeadConfig}
                     onChange={event => {
                       if (event.target.value === '__custom__') {
                         setEffortCustom(true)
@@ -326,6 +360,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <span className="ag-unit">{t('unitSteps')}</span>
                 </span>
               </Field>
+              <div className="ag-note">{t('zeroUnlimited')}</div>
               <Field label={t('fieldFiles')}>
                 <span className="ag-number">
                   <input
@@ -340,6 +375,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <span className="ag-unit">{t('unitFiles')}</span>
                 </span>
               </Field>
+              <div className="ag-note">{t('zeroUnlimited')}</div>
               <Field label={t('fieldBanSleep')}>
                 <input
                   type="checkbox"
@@ -372,14 +408,25 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <span className="ag-unit">{t('unitSteps')}</span>
                 </span>
               </Field>
+              <div className="ag-note">{t('zeroUnlimited')}</div>
             </Section>
+            </div>
 
-            <Section title={t('sectionLead')}>
-              <div className="ag-lead">{route ?? t('unknown')}</div>
-              {leadDiffers
-                ? <div className="ag-diff">{t('leadDiffers', { model: current.model })}</div>
-                : null}
-            </Section>
+            <div className="ag-foot">
+              <Section title={t('sectionLead')}>
+                <div className="ag-lead">{route ?? t('unknown')}</div>
+                {leadDiffers
+                  ? <div className="ag-diff">{t('leadDiffers', { model: current.model })}</div>
+                  : null}
+              </Section>
+
+              {snapshot.status !== 'ready'
+                ? <div className="ag-status">{t('settingsUnavailable')}</div>
+                : snapshot.writable === false
+                  ? <div className="ag-status">{t('readOnly')}</div>
+                  : null}
+              <div className="ag-hint">{t('hint')}</div>
+            </div>
 
             <div className="ag-actions">
               <button
@@ -400,12 +447,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
               </button>
               <span className="ag-msg">{messageKey === '' ? '' : t(messageKey)}</span>
             </div>
-            {snapshot.status !== 'ready'
-              ? <div className="ag-status">{t('settingsUnavailable')}</div>
-              : snapshot.writable === false
-                ? <div className="ag-status">{t('readOnly')}</div>
-                : null}
-            <div className="ag-hint">{t('hint')}</div>
           </div>,
           document.body
         )

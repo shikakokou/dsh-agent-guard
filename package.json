@@ -32,7 +32,8 @@
   },
   "scripts": {
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node test/guard-scenarios.mjs && node test/placement-scenarios.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

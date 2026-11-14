@@ -40,7 +40,11 @@
 .ag-panel {
   position: fixed;
   z-index: 2147483000;
-  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 10px 0 12px 12px;
   border-radius: 10px;
   border: 1px solid var(--dsw-alias-border-l2, #d8dbe0);
   background: var(--dsw-alias-bg-layer-1, #ffffff);
@@ -50,11 +54,59 @@
   text-align: left;
 }
 
+/* Every box inside the panel, not just the panel, must include its padding and
+   border in its declared width: inputs are 176px wide, rows must stay inside
+   the body even after the vertical scrollbar takes its share. */
+.ag-panel,
+.ag-panel * {
+  box-sizing: border-box;
+}
+
+.ag-number,
+.ag-actions,
+.ag-head,
+.ag-section,
+.ag-hint {
+  min-width: 0;
+}
+
 .ag-head {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding-right: 12px;
+}
+
+.ag-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 12px;
+  padding-bottom: 16px;
+}
+
+/* Pinned footer under the scroll area: the current Lead, the settings status
+   and the hint stay visible while the config sections scroll. */
+.ag-foot {
+  flex: none;
+  min-width: 0;
+  padding-right: 12px;
+  position: relative;
+}
+
+.ag-foot::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 48px;
+  top: -48px;
+  left: 0;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--dsw-alias-bg-layer-1, #ffffff) 0% , transparent 100%);
 }
 
 .ag-title {
@@ -76,6 +128,10 @@
   border-top: 1px solid var(--dsw-alias-border-l2, #d8dbe0);
 }
 
+.ag-foot .ag-section {
+  margin-top: 0;
+}
+
 .ag-section-title {
   color: var(--dsw-alias-label-secondary, #5b6169);
   font-size: 11px;
@@ -89,11 +145,14 @@
   justify-content: space-between;
   gap: 8px;
   margin-top: 6px;
+  min-width: 0;
 }
 
 .ag-field-label {
-  flex: 0 0 auto;
-  min-width: 96px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--dsw-alias-label-tertiary, #8a8f98);
   white-space: nowrap;
 }
@@ -108,6 +167,12 @@
   background: var(--dsw-alias-bg-base, #ffffff);
   color: var(--dsw-alias-label-primary, #1f2329);
   font: 12px/18px ui-sans-serif, system-ui, sans-serif;
+}
+
+.ag-input,
+.ag-select,
+.ag-effort-custom {
+  max-width: 100%;
 }
 
 .ag-input:focus,
@@ -219,9 +284,18 @@
 
 .ag-actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+.ag-note {
+  margin-top: 2px;
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: right;
 }
 
 .ag-btn {
@@ -257,9 +331,7 @@
 }
 
 .ag-hint {
-  margin-top: 10px;
   padding-top: 8px;
-  border-top: 1px dashed var(--dsw-alias-border-l2, #d8dbe0);
   color: var(--dsw-alias-label-tertiary, #8a8f98);
   font-size: 11px;
   line-height: 16px;

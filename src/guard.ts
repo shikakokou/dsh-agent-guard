@@ -4,6 +4,7 @@ export interface GuardConfig {
   provider: string
   model: string
   reasoningEffort: string
+  inheritLeadConfig: boolean
   maxConcurrentChildren: number
   banSleepPolling: boolean
   stepBudget: number
@@ -18,6 +19,7 @@ export const DEFAULT_GUARD: GuardConfig = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
+  inheritLeadConfig: false,
   maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
@@ -43,6 +45,9 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     provider: text(value.provider, DEFAULT_GUARD.provider),
     model: text(value.model, DEFAULT_GUARD.model),
     reasoningEffort: text(value.reasoningEffort, DEFAULT_GUARD.reasoningEffort),
+    inheritLeadConfig: typeof value.inheritLeadConfig === 'boolean'
+      ? value.inheritLeadConfig
+      : DEFAULT_GUARD.inheritLeadConfig,
     maxConcurrentChildren: count(
       value.maxConcurrentChildren ?? value.maxConcurrentTeammates,
       DEFAULT_GUARD.maxConcurrentChildren,
