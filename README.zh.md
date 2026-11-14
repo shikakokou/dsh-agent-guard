@@ -5,15 +5,15 @@ dsh-agent-guard 是 DeepSeek Harness 的插件，在 Host 里强制约束 agent 
 ## 七道约束
 
 **子 agent**
-- 启动参数：子 agent 的启动参数由插件强制，一律使用配置里的 provider、model 和 reasoningEffort，父 agent 传入的值会被替换。
+- 启动参数：子 agent 的启动参数由插件强制，一律使用配置里的 provider、model 和 reasoningEffort，父 agent 传入的值会被替换。把 inheritLeadConfig 设为 true 后不再强制覆盖，子 agent 沿用 Lead 节点配置（DSH 默认）。
 - 并发上限：并发上限按活跃子 agent 的总数计算，到上限后新建会被拒绝并返回原因，已经结束的成员不占名额。
 - 禁止 sleep 轮询：Lead 执行 Start-Sleep 或 sleep 会被拒绝。
-- 步数限制：每轮步数预算用完后，子 agent 只能输出报告，预算在下一轮开始时重置。
-- 写入上限：每轮文件写入上限同样按轮计算，子 agent 当前轮写入的不同文件数到上限后，只能继续改已经写过的文件，写入计数在下一轮开始时重置。
+- 步数限制：每轮步数预算（stepBudget）用完后，子 agent 只能输出报告，预算在下一轮开始时重置；上限 0 表示不限制。
+- 写入上限：每轮文件写入上限（maxFilesPerAgent）同样按轮计算，子 agent 当前轮写入的不同文件数（write、edit、str_replace_editor 都计入）到上限后，只能继续改已经写过的文件，写入计数在下一轮开始时重置；上限 0 表示不限制。
 
 **Lead**
 - 监督者与调度者角色：按「Lead 不自己改文件」的约束，Lead 调 write、edit、str_replace_editor 会被拒绝，提示把 task 拆给 teammate 或 subagent。
-- 步数限制：Lead 每轮步数上限用完后，只剩 spawn、send_message、team_task 系列和汇报类工具可用。
+- 步数限制：Lead 每轮步数上限（leadStepBudget）用完后，只剩 spawn、send_message、team_task 系列和汇报类工具可用；上限 0 表示不限制。
 
 这些拦截都由 Host 执行，模型无法绕过。
 
@@ -46,6 +46,7 @@ dsh plugin --profile web add .
     provider: deepseek-account
     model: deepseek-flash
     reasoningEffort: low
+    inheritLeadConfig: false
     maxConcurrentChildren: 4
     banSleepPolling: true
     stepBudget: 25
