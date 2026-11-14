@@ -11,6 +11,8 @@ export const Config = z.object({
   provider: z.string().default('deepseek-account').volatile(),
   model: z.string().default('deepseek-flash').volatile(),
   reasoningEffort: z.string().default('low').volatile(),
+  // When true, a child keeps the Lead node's provider/model/reasoningEffort (DSH default) instead of the forced trio.
+  inheritLeadConfig: z.boolean().default(false).volatile(),
   maxConcurrentChildren: z.number().step(1).min(0).default(4).volatile(),
   // Kept so a profile that still stores the old key validates; maxConcurrentChildren wins when both are set.
   maxConcurrentTeammates: z.number().step(1).min(0).volatile(),
@@ -27,6 +29,7 @@ const DEFAULTS = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
+  inheritLeadConfig: false,
   maxConcurrentChildren: 4,
   banSleepPolling: true,
   stepBudget: 25,
@@ -102,6 +105,7 @@ function resolveOptions(config) {
     model: String(readValue(config, 'model', DEFAULTS.model)),
     reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)).trim()
       || DEFAULTS.reasoningEffort,
+    inheritLeadConfig: readValue(config, 'inheritLeadConfig', DEFAULTS.inheritLeadConfig) === true,
     maxConcurrentChildren: countValue(
       readValue(config, 'maxConcurrentChildren', legacyConcurrent),
       DEFAULTS.maxConcurrentChildren,
@@ -320,6 +324,7 @@ export function apply(ctx, config = {}) {
     const guarded = async function startActivation(spec) {
       const options = resolveOptions(config)
       const forced = options.enabled === true
+        && options.inheritLeadConfig !== true
         && (options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent))
       if (forced) {
         ctx.logger.info(
