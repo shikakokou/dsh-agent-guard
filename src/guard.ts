@@ -4,12 +4,18 @@ export interface GuardConfig {
   provider: string
   model: string
   reasoningEffort: string
+  investigateProvider: string
+  investigateModel: string
+  investigateReasoningEffort: string
+  executeProvider: string
+  executeModel: string
+  executeReasoningEffort: string
   inheritLeadConfig: boolean
   maxConcurrentChildren: number
   banSleepPolling: boolean
   stepBudget: number
   maxFilesPerAgent: number
-  leadNoWrite: boolean
+  leadNoExecute: boolean
   leadStepBudget: number
 }
 
@@ -19,12 +25,18 @@ export const DEFAULT_GUARD: GuardConfig = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
+  investigateProvider: 'deepseek-account',
+  investigateModel: 'deepseek-flash',
+  investigateReasoningEffort: 'high',
+  executeProvider: 'deepseek-account',
+  executeModel: 'deepseek-flash',
+  executeReasoningEffort: 'low',
   inheritLeadConfig: false,
   maxConcurrentChildren: 4,
   banSleepPolling: true,
-  stepBudget: 25,
-  maxFilesPerAgent: 12,
-  leadNoWrite: true,
+  stepBudget: 40,
+  maxFilesPerAgent: 24,
+  leadNoExecute: true,
   leadStepBudget: 24
 }
 
@@ -36,6 +48,10 @@ function text(value: unknown, fallback: string): string {
   return typeof value === 'string' && value !== '' ? value : fallback
 }
 
+function groupText(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
+}
+
 export function normalizeGuard(raw: unknown): GuardConfig {
   if (raw === null || typeof raw !== 'object') return { ...DEFAULT_GUARD }
   const value = raw as Record<string, unknown>
@@ -45,6 +61,15 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     provider: text(value.provider, DEFAULT_GUARD.provider),
     model: text(value.model, DEFAULT_GUARD.model),
     reasoningEffort: text(value.reasoningEffort, DEFAULT_GUARD.reasoningEffort),
+    investigateProvider: groupText(value.investigateProvider, DEFAULT_GUARD.investigateProvider),
+    investigateModel: groupText(value.investigateModel, DEFAULT_GUARD.investigateModel),
+    investigateReasoningEffort: groupText(
+      value.investigateReasoningEffort,
+      DEFAULT_GUARD.investigateReasoningEffort,
+    ),
+    executeProvider: groupText(value.executeProvider, DEFAULT_GUARD.executeProvider),
+    executeModel: groupText(value.executeModel, DEFAULT_GUARD.executeModel),
+    executeReasoningEffort: groupText(value.executeReasoningEffort, DEFAULT_GUARD.executeReasoningEffort),
     inheritLeadConfig: typeof value.inheritLeadConfig === 'boolean'
       ? value.inheritLeadConfig
       : DEFAULT_GUARD.inheritLeadConfig,
@@ -55,7 +80,11 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
     stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget),
     maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent),
-    leadNoWrite: typeof value.leadNoWrite === 'boolean' ? value.leadNoWrite : DEFAULT_GUARD.leadNoWrite,
+    leadNoExecute: typeof value.leadNoExecute === 'boolean'
+      ? value.leadNoExecute
+      : typeof value.leadNoWrite === 'boolean'
+        ? value.leadNoWrite
+        : DEFAULT_GUARD.leadNoExecute,
     leadStepBudget: count(value.leadStepBudget, DEFAULT_GUARD.leadStepBudget)
   }
 }

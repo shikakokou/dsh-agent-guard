@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { normalizeGuard } from './guard.ts'
+import { DEFAULT_GUARD, normalizeGuard } from './guard.ts'
 import type { GuardConfig } from './guard.ts'
 import en from './locales/en.json'
 import zh from './locales/zh.json'
@@ -109,12 +109,142 @@ function useAnchorPlacement(
   return placement
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
+const HELP_TIP_WIDTH = 240
+
+function HelpTip({ text }: { text: string }): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState<{ left: number; top: number; below: boolean } | null>(null)
+  const iconRef = useRef<HTMLSpanElement | null>(null)
+  const show = () => {
+    const rect = iconRef.current?.getBoundingClientRect()
+    if (rect === undefined) return
+    const width = Math.min(HELP_TIP_WIDTH, window.innerWidth - 16)
+    const left = Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8))
+    const below = rect.top < 180
+    setPosition({ left, top: below ? rect.bottom + 6 : rect.top - 6, below })
+    setOpen(true)
+  }
+  const hide = () => setOpen(false)
+  return (
+    <>
+      <span
+        ref={iconRef}
+        className="ag-help"
+        role="button"
+        tabIndex={0}
+        aria-label={text}
+        aria-expanded={open}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={event => { event.preventDefault(); event.stopPropagation() }}
+        onKeyDown={event => { if (event.key === ' ' || event.key === 'Enter') event.preventDefault() }}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+          <path d="M12 17h.01" />
+        </svg>
+      </span>
+      {open && position !== null
+        ? createPortal(
+          <span
+            className="ag-help-tip"
+            role="tooltip"
+            style={{
+              left: position.left,
+              top: position.top,
+              width: Math.min(HELP_TIP_WIDTH, window.innerWidth - 16),
+              transform: position.below ? undefined : 'translateY(-100%)',
+            }}
+          >{text}</span>,
+          document.body,
+        )
+        : null}
+    </>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }): React.ReactElement {
   return (
     <label className="ag-field">
-      <span className="ag-field-label">{label}</span>
+      <span className="ag-field-label">
+        {label}
+        {hint !== undefined ? <HelpTip text={hint} /> : null}
+      </span>
       {children}
     </label>
+  )
+}
+
+function EffortField(props: {
+  label: string
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+  t: Translate
+}): React.ReactElement {
+  const { label, value, disabled, onChange, t } = props
+  const [custom, setCustom] = useState(
+    () => !REASONING_EFFORTS.includes(value as typeof REASONING_EFFORTS[number])
+  )
+  return (
+    <Field label={label}>
+      {custom ? (
+        <span className="ag-effort-custom">
+          <input
+            className="ag-input"
+            value={value}
+            disabled={disabled}
+            placeholder={t('effortPlaceholder')}
+            autoFocus
+            onChange={event => onChange(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter') setCustom(false) }}
+          />
+          <button
+            type="button"
+            className="ag-effort-presets"
+            disabled={disabled}
+            onClick={() => {
+              setCustom(false)
+              if (!REASONING_EFFORTS.includes(value as typeof REASONING_EFFORTS[number])) {
+                onChange('low')
+              }
+            }}
+          >{t('effortPresets')}</button>
+        </span>
+      ) : (
+        <select
+          className="ag-select"
+          value={value}
+          disabled={disabled}
+          onChange={event => {
+            if (event.target.value === '__custom__') {
+              setCustom(true)
+              return
+            }
+            onChange(event.target.value)
+          }}
+        >
+          {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+          {!REASONING_EFFORTS.includes(value as typeof REASONING_EFFORTS[number])
+            ? <option value={value}>{value}</option>
+            : null}
+          <option value="__custom__">{t('effortCustom')}</option>
+        </select>
+      )}
+    </Field>
   )
 }
 
@@ -149,9 +279,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const editable = snapshot.status === 'ready' && snapshot.writable
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored)
   const leadDiffers = model !== undefined && model !== current.model
-  const [effortCustom, setEffortCustom] = useState(
-    () => !REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])
-  )
 
   useEffect(() => {
     if (!open) {
@@ -284,51 +411,47 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('model', event.target.value)}
                 />
               </Field>
-              <Field label={t('fieldEffort')}>
-                {effortCustom ? (
-                  <span className="ag-effort-custom">
-                    <input
-                      className="ag-input"
-                      value={current.reasoningEffort}
-                      disabled={!editable || current.inheritLeadConfig}
-                      placeholder={t('effortPlaceholder')}
-                      autoFocus
-                      onChange={event => patch('reasoningEffort', event.target.value)}
-                      onKeyDown={event => { if (event.key === 'Enter') setEffortCustom(false) }}
-                    />
-                    <button
-                      type="button"
-                      className="ag-effort-presets"
-                      disabled={!editable || current.inheritLeadConfig}
-                      onClick={() => {
-                        setEffortCustom(false)
-                        if (!REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])) {
-                          patch('reasoningEffort', 'low')
-                        }
-                      }}
-                    >{t('effortPresets')}</button>
-                  </span>
-                ) : (
-                  <select
-                    className="ag-select"
-                    value={current.reasoningEffort}
-                    disabled={!editable || current.inheritLeadConfig}
-                    onChange={event => {
-                      if (event.target.value === '__custom__') {
-                        setEffortCustom(true)
-                        return
-                      }
-                      patch('reasoningEffort', event.target.value)
-                    }}
-                  >
-                    {REASONING_EFFORTS.map(effort => <option key={effort} value={effort}>{effort}</option>)}
-                    {!REASONING_EFFORTS.includes(current.reasoningEffort as typeof REASONING_EFFORTS[number])
-                      ? <option value={current.reasoningEffort}>{current.reasoningEffort}</option>
-                      : null}
-                    <option value="__custom__">{t('effortCustom')}</option>
-                  </select>
-                )}
+              <EffortField label={t('fieldEffort')} value={current.reasoningEffort} disabled={!editable || current.inheritLeadConfig} onChange={value => patch('reasoningEffort', value)} t={t} />
+            </Section>
+
+            <Section title={t('sectionModelGroups')}>
+              <div className="ag-note">{t('modelGroupsHint')}</div>
+              <div className="ag-note ag-note-left">{t('groupInvestigate')}</div>
+              <Field label={t('fieldProvider')}>
+                <input
+                  className="ag-input"
+                  value={current.investigateProvider || DEFAULT_GUARD.investigateProvider}
+                  disabled={!editable}
+                  onChange={event => patch('investigateProvider', event.target.value)}
+                />
               </Field>
+              <Field label={t('fieldModel')}>
+                <input
+                  className="ag-input"
+                  value={current.investigateModel || DEFAULT_GUARD.investigateModel}
+                  disabled={!editable}
+                  onChange={event => patch('investigateModel', event.target.value)}
+                />
+              </Field>
+              <EffortField label={t('fieldEffort')} value={current.investigateReasoningEffort || DEFAULT_GUARD.investigateReasoningEffort} disabled={!editable} onChange={value => patch('investigateReasoningEffort', value)} t={t} />
+              <div className="ag-note ag-note-left">{t('groupExecute')}</div>
+              <Field label={t('fieldProvider')}>
+                <input
+                  className="ag-input"
+                  value={current.executeProvider || DEFAULT_GUARD.executeProvider}
+                  disabled={!editable}
+                  onChange={event => patch('executeProvider', event.target.value)}
+                />
+              </Field>
+              <Field label={t('fieldModel')}>
+                <input
+                  className="ag-input"
+                  value={current.executeModel || DEFAULT_GUARD.executeModel}
+                  disabled={!editable}
+                  onChange={event => patch('executeModel', event.target.value)}
+                />
+              </Field>
+              <EffortField label={t('fieldEffort')} value={current.executeReasoningEffort || DEFAULT_GUARD.executeReasoningEffort} disabled={!editable} onChange={value => patch('executeReasoningEffort', value)} t={t} />
             </Section>
 
             <Section title={t('sectionTeam')}>
@@ -385,13 +508,13 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('banSleepPolling', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldLeadWrite')}>
+              <Field label={t('fieldLeadExecute')} hint={t('leadExecuteHint')}>
                 <input
                   type="checkbox"
                   className="ag-check"
-                  checked={current.leadNoWrite}
+                  checked={current.leadNoExecute}
                   disabled={!editable}
-                  onChange={event => patch('leadNoWrite', event.target.checked)}
+                  onChange={event => patch('leadNoExecute', event.target.checked)}
                 />
               </Field>
               <Field label={t('fieldLeadBudget')}>
@@ -441,7 +564,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                 type="button"
                 className="ag-btn"
                 disabled={!dirty || saving}
-                onClick={() => { setDraft(null); setMessageKey('') }}
+                onClick={() => { setDraft({ ...DEFAULT_GUARD }); setMessageKey('') }}
               >
                 {t('reset')}
               </button>

@@ -33,7 +33,7 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node test/guard-scenarios.mjs && node test/placement-scenarios.mjs"
+    "test": "node test/placement-scenarios.mjs && node test/lead-gate.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
@@ -43,6 +43,10 @@
     "vite": "^7.3.6"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
     "@deepseek-ai/schemastery": "3.18.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2"
   }
 }

@@ -89,8 +89,6 @@
   padding-bottom: 16px;
 }
 
-/* Pinned footer under the scroll area: the current Lead, the settings status
-   and the hint stay visible while the config sections scroll. */
 .ag-foot {
   flex: none;
   min-width: 0;
@@ -296,6 +294,47 @@
   font-size: 11px;
   line-height: 16px;
   text-align: right;
+}
+
+.ag-note.ag-note-left {
+  margin-top: 14px;
+  text-align: left;
+  text-wrap: balance;
+}
+
+.ag-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  color: var(--dsw-alias-label-tertiary, #8a8f98);
+  vertical-align: middle;
+  cursor: help;
+}
+
+.ag-help:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-success-primary, #2f9e44);
+  outline-offset: 1px;
+}
+
+.ag-help-tip {
+  position: fixed;
+  z-index: 2147483001;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #2b2f36;
+  color: #fff;
+  font: 11px/16px ui-sans-serif, system-ui, sans-serif;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
 }
 
 .ag-btn {
