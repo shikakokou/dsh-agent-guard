@@ -1,70 +1,79 @@
 # dsh-agent-guard
 
-dsh-agent-guard 是 DeepSeek Harness 的插件，在 Host 里强制约束 agent 的行为，并在输入框的工具行里放一个面板，用来编辑这些约束。被委派出去的下级 agent 统称子 agent，teammate 和普通 subagent 都算。
+给 DeepSeek Harness 加一层护栏，约束被委派出去的子 agent 和 Lead 的行为，并在输入框的工具行放一个面板，方便调整这些规则。拦截全部在 Host 侧执行，模型无法绕过。
 
-## 七道约束
+## 作用范围
 
-**子 agent**
-- 启动参数：子 agent 的启动参数由插件强制，一律使用配置里的 provider、model 和 reasoningEffort，父 agent 传入的值会被替换。把 inheritLeadConfig 设为 true 后不再强制覆盖，子 agent 沿用 Lead 节点配置（DSH 默认）。
-- 并发上限：并发上限按活跃子 agent 的总数计算，到上限后新建会被拒绝并返回原因，已经结束的成员不占名额。
-- 禁止 sleep 轮询：Lead 执行 Start-Sleep 或 sleep 会被拒绝。
-- 步数限制：每轮步数预算（stepBudget）用完后，子 agent 只能输出报告，预算在下一轮开始时重置；上限 0 表示不限制。
-- 写入上限：每轮文件写入上限（maxFilesPerAgent）同样按轮计算，子 agent 当前轮写入的不同文件数（write、edit、str_replace_editor 都计入）到上限后，只能继续改已经写过的文件，写入计数在下一轮开始时重置；上限 0 表示不限制。
-
-**Lead**
-- 监督者与调度者角色：按「Lead 不自己改文件」的约束，Lead 调 write、edit、str_replace_editor 会被拒绝，提示把 task 拆给 teammate 或 subagent。
-- 步数限制：Lead 每轮步数上限（leadStepBudget）用完后，只剩 spawn、send_message、team_task 系列和汇报类工具可用；上限 0 表示不限制。
-
-这些拦截都由 Host 执行，模型无法绕过。
+| 对象 | 约束 | 效果 |
+| --- | --- | --- |
+| 子 agent | 启动参数 | 强制使用插件指定的 provider、model 和推理强度，不接受子 agent 自行选择 |
+| 子 agent | 并发 | 活跃子 agent 数量达到上限时拒绝新建并说明原因，已经结束的不占名额 |
+| 子 agent | sleep 轮询 | Lead 执行 sleep 或 Start-Sleep 会被拒绝 |
+| 子 agent | 步数 | 每轮预算用完后只能输出报告，下一轮开始时重置，设为 0 表示不限制 |
+| 子 agent | 写入 | 每轮可写的不同文件数达到上限后，只能继续修改已经写过的文件，设为 0 表示不限制 |
+| Lead | 直接执行 | Lead 调用 read、grep、glob、write、edit 等工具会被拒绝，只允许读取用户明确引用的路径，可以运行 tsc、build、test、git diff 这类验证命令。调查交给 subagent，执行交给 teammate |
+| Lead | 步数 | 每轮预算用完后仅保留派发、消息、任务和汇报类工具，设为 0 表示不限制 |
 
 ## 安装
 
-前提是 `dsh` CLI 已经装好、pnpm 可用。把仓库克隆或复制到本机任意目录，在该目录执行：
+前提是 dsh CLI 已经就绪且 pnpm 可用。在插件仓库目录下依次执行
 
-```powershell
+```bash
 pnpm install
 pnpm build
 dsh plugin --profile web add .
 ```
 
-停用方式是在 profile 的 cordis.patch.yml 里写入：
-
-```yaml
-- id: agent-guard
-  disabled: true
-```
-
 ## 配置
 
-本插件的配置写在 profile 的 cordis.patch.yml 里，面板保存后写入同一处并立即生效：
+配置写在 profile 的 cordis.patch.yml 文件中。面板保存后写回同一位置并立即生效。
 
 ```yaml
 - id: agent-guard
   config:
     enabled: true
     scope: team
+
+    # 基础三元组，未归类的子 agent 使用
     provider: deepseek-account
     model: deepseek-flash
     reasoningEffort: low
+
+    # investigate 组，subagent 的只读调查
+    investigateProvider: deepseek-account
+    investigateModel: deepseek-flash
+    investigateReasoningEffort: high
+
+    # execute 组，teammate 的执行任务
+    executeProvider: deepseek-account
+    executeModel: deepseek-flash
+    executeReasoningEffort: low
+
     inheritLeadConfig: false
     maxConcurrentChildren: 4
     banSleepPolling: true
-    stepBudget: 25
-    maxFilesPerAgent: 12
-    leadNoWrite: true
+    stepBudget: 40
+    maxFilesPerAgent: 24
+    leadNoExecute: true
     leadStepBudget: 24
 ```
 
-推理强度是自由文本，面板只给常见档位建议，实际能用的档位由 provider 适配器公布的模型能力决定。填了不支持的档位，DSH 的 LLM 服务会在发请求前报 UNSUPPORTED_REASONING_EFFORT；deepseek 系只接受 `off/low/high/max`，pi-ai 提供的模型可能有 `xhigh` 之类的自定义档位。
+模型的三个字段分为两组，按用途覆盖基础三元组。subagent 和 subagent_fork 使用 investigate 组，spawn_teammate 使用 execute 组。任意一项留空则回退到该组自己的默认值，也就是示例中的六项。把 inheritLeadConfig 设为 true 可以跳过强制覆盖，让子 agent 沿用 Lead 的配置，这是 DSH 的默认行为。
 
-面板文案和拒绝原因都跟随 DSH 的界面语言，没有显式选过语言时用中文，改过语言后从下一次拒绝开始生效；日志保持英文。
+推理强度是自由文本，面板只提供常见档位作为提示，实际可用档位由 provider 公布的模型能力决定。填入不支持的档位会在发送请求前报错，deepseek 系接受 off、low、high、max。面板文案和拒绝原因跟随 DSH 界面语言，未设置时使用中文。
+
+## 停用
+
+```yaml
+- id: agent-guard
+  disabled: true
+```
 
 ## 开发
 
-```powershell
+```bash
 pnpm build        # 产出 dist/client.js
 pnpm typecheck    # tsc --noEmit
-node test/guard-scenarios.mjs   # Lead 拦截矩阵回归，不依赖 DSH
 ```
 
-改完 src 或 index.js 后执行 pnpm build，再重启 dsh web。Host 端代码和客户端 bundle 都在启动时加载。
+改动 src 或 index.js 之后需要重新构建并重启 dsh web。Host 端代码和客户端 bundle 都在启动时加载。
