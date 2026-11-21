@@ -57,10 +57,6 @@ function useAnchorPlacement(
 ): Placement | null {
   const [placement, setPlacement] = useState<Placement | null>(null)
 
-  // The panel portals to body and sizes itself from content, so measure the
-  // natural height (visible part plus every child's hidden overflow) and let
-  // computePlacement cap it: the panel then scrolls its body instead of
-  // growing past the window edge.
   useLayoutEffect(() => {
     if (!open) {
       setPlacement(null)
@@ -248,10 +244,17 @@ function EffortField(props: {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+function Section({ title, hint, children }: {
+  title: string
+  hint?: string
+  children: React.ReactNode
+}): React.ReactElement {
   return (
     <section className="ag-section">
-      <div className="ag-section-title">{title}</div>
+      <div className="ag-section-head">
+        <span className="ag-section-title">{title}</span>
+        {hint === undefined ? null : <span className="ag-note ag-section-hint">{hint}</span>}
+      </div>
       {children}
     </section>
   )
@@ -264,21 +267,20 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const anchor = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const placement = useAnchorPlacement(open, anchor, panel)
-  const { route, model } = useCurrentRoute(props)
+  const { route } = useCurrentRoute(props)
   const fallback = useFallbackConfig(props)
 
   const subscribe = useCallback((listener: () => void) => form.subscribe(listener), [form])
   const getSnapshot = useCallback(() => form.getSnapshot(), [form])
   const snapshot = useSyncExternalStore(subscribe, getSnapshot)
 
-  const stored = snapshot.value ?? fallback
+  const stored = normalizeGuard(snapshot.value ?? fallback)
   const [draft, setDraft] = useState<GuardConfig | null>(null)
   const [saving, setSaving] = useState(false)
   const [messageKey, setMessageKey] = useState<MessageKey>('')
   const current = draft ?? stored
   const editable = snapshot.status === 'ready' && snapshot.writable
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored)
-  const leadDiffers = model !== undefined && model !== current.model
 
   useEffect(() => {
     if (!open) {
@@ -385,7 +387,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
             </Section>
 
             <Section title={t('sectionSubagent')}>
-              <div className="ag-note">{t('sectionSubagentHint')}</div>
               <Field label={t('fieldInheritLead')}>
                 <input
                   type="checkbox"
@@ -395,27 +396,9 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('inheritLeadConfig', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldProvider')}>
-                <input
-                  className="ag-input"
-                  value={current.provider}
-                  disabled={!editable || current.inheritLeadConfig}
-                  onChange={event => patch('provider', event.target.value)}
-                />
-              </Field>
-              <Field label={t('fieldModel')}>
-                <input
-                  className="ag-input"
-                  value={current.model}
-                  disabled={!editable || current.inheritLeadConfig}
-                  onChange={event => patch('model', event.target.value)}
-                />
-              </Field>
-              <EffortField label={t('fieldEffort')} value={current.reasoningEffort} disabled={!editable || current.inheritLeadConfig} onChange={value => patch('reasoningEffort', value)} t={t} />
             </Section>
 
-            <Section title={t('sectionModelGroups')}>
-              <div className="ag-note">{t('modelGroupsHint')}</div>
+            <Section title={t('sectionModelGroups')} hint={t('modelGroupsHint')}>
               <div className="ag-note ag-note-left">{t('groupInvestigate')}</div>
               <Field label={t('fieldProvider')}>
                 <input
@@ -538,9 +521,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
             <div className="ag-foot">
               <Section title={t('sectionLead')}>
                 <div className="ag-lead">{route ?? t('unknown')}</div>
-                {leadDiffers
-                  ? <div className="ag-diff">{t('leadDiffers', { model: current.model })}</div>
-                  : null}
               </Section>
 
               {snapshot.status !== 'ready'

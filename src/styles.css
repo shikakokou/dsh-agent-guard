@@ -54,9 +54,6 @@
   text-align: left;
 }
 
-/* Every box inside the panel, not just the panel, must include its padding and
-   border in its declared width: inputs are 176px wide, rows must stay inside
-   the body even after the vertical scrollbar takes its share. */
 .ag-panel,
 .ag-panel * {
   box-sizing: border-box;
@@ -128,6 +125,18 @@
 
 .ag-foot .ag-section {
   margin-top: 0;
+}
+
+.ag-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ag-section-head .ag-note {
+  margin-top: 0;
+  min-width: 0;
 }
 
 .ag-section-title {
@@ -273,11 +282,6 @@
   color: var(--dsw-alias-label-primary, #1f2329);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   word-break: break-all;
-}
-
-.ag-diff {
-  margin-top: 4px;
-  color: var(--dsw-alias-label-secondary, #5b6169);
 }
 
 .ag-actions {
