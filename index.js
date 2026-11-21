@@ -1,25 +1,34 @@
+import path from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 export const name = 'agent-guard'
 
 export const inject = ['subagents']
 
-// Every field is volatile so a settings write reaches the running plugin without a restart.
 export const Config = z.object({
   enabled: z.boolean().default(true).volatile(),
   scope: z.union(['team', 'all']).default('team').volatile(),
   provider: z.string().default('deepseek-account').volatile(),
   model: z.string().default('deepseek-flash').volatile(),
   reasoningEffort: z.string().default('low').volatile(),
+  investigateProvider: z.string().default('deepseek-account').volatile(),
+  investigateModel: z.string().default('deepseek-flash').volatile(),
+  investigateReasoningEffort: z.string().default('high').volatile(),
+  executeProvider: z.string().default('deepseek-account').volatile(),
+  executeModel: z.string().default('deepseek-flash').volatile(),
+  executeReasoningEffort: z.string().default('low').volatile(),
   // When true, a child keeps the Lead node's provider/model/reasoningEffort (DSH default) instead of the forced trio.
   inheritLeadConfig: z.boolean().default(false).volatile(),
-  maxConcurrentChildren: z.number().step(1).min(0).default(4).volatile(),
+  maxConcurrentChildren: z.number().step(1).min(0).volatile(),
   // Kept so a profile that still stores the old key validates; maxConcurrentChildren wins when both are set.
   maxConcurrentTeammates: z.number().step(1).min(0).volatile(),
   banSleepPolling: z.boolean().default(true).volatile(),
-  stepBudget: z.number().step(1).min(0).default(25).volatile(),
-  maxFilesPerAgent: z.number().step(1).min(0).default(12).volatile(),
-  leadNoWrite: z.boolean().default(true).volatile(),
+  stepBudget: z.number().step(1).min(0).default(40).volatile(),
+  maxFilesPerAgent: z.number().step(1).min(0).default(24).volatile(),
+  // Deprecated legacy key
+  leadNoWrite: z.boolean().volatile(),
+  leadNoExecute: z.boolean().volatile(),
   leadStepBudget: z.number().step(1).min(0).default(24).volatile(),
 })
 
@@ -29,36 +38,85 @@ const DEFAULTS = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
+  investigateProvider: 'deepseek-account',
+  investigateModel: 'deepseek-flash',
+  investigateReasoningEffort: 'high',
+  executeProvider: 'deepseek-account',
+  executeModel: 'deepseek-flash',
+  executeReasoningEffort: 'low',
   inheritLeadConfig: false,
   maxConcurrentChildren: 4,
   banSleepPolling: true,
-  stepBudget: 25,
-  maxFilesPerAgent: 12,
-  leadNoWrite: true,
+  stepBudget: 40,
+  maxFilesPerAgent: 24,
+  leadNoExecute: true,
   leadStepBudget: 24,
 }
 
-// Model-facing refusal copy. The Host has no locale service, so the language
-// follows the shared settings document's `locale` namespace (namespace `locale`,
-// field `preference`) — the same value the Web UI language row persists.
 const COPY = {
   zh: {
-    concurrency: (limit, active) => `并发上限 ${limit}：当前已有 ${active} 个 teammate 或子 agent 在运行。等它们结束再新建，或把任务合并给现有 agent。`,
-    sleepPolling: () => '禁止用 Start-Sleep 或 sleep 轮询等待子 agent。子 agent 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。',
+    concurrency: (limit, active) => '并发上限 ' + limit + '：当前已有 ' + active + ' 个 teammate 在运行。等它们结束，或把任务合并给现有 teammate；只读调查再考虑 subagent。',
+    sleepPolling: () => '禁止用 Start-Sleep 或 sleep 轮询等待 teammate。teammate 完成时会发消息唤醒你：直接结束本轮，或用 wait_agent 等待；查进度用 list_agents 或 team_task_list。',
     stepBudget: limit => `本轮步数预算已用完（每轮 ${limit} 步，下一轮自动重置）。本轮停止调用工具，直接输出报告：已完成、未完成、剩余项，由上一级决定下一轮怎么继续。`,
     fileBudget: (used, limit) => `本轮已写 ${used} 个不同文件，达到每轮上限 ${limit} 个（下一轮自动重置）。本轮停止写文件，直接输出报告：已完成的改动 + 剩余文件清单，由上一级决定下一轮怎么继续。`,
-    leadWrite: () => '你是团队 Lead：不要自己改文件。把改动拆成 team_task_create，再用 send_message 把文件清单、验收标准派给 teammate 或 subagent；Lead 只做计划、复核、汇总。确实要自己动手，就先把 Guard 的「Lead 不自己改文件」关掉。',
-    leadStepBudget: limit => `本轮 Lead 步数预算已用完（每轮 ${limit} 步，下一轮自动重置）。本轮不要再调查或改代码：直接派活、汇总当前状态、结束本轮，等 teammate 回报或用户指令。`,
+    leadExecute: (tool, kind) => '你是团队 Lead：不直接执行任务（' + tool + '）。查信息/看代码 → 用 subagent（只读调查）；改代码/写文件 → 用 spawn_teammate 派给 teammate。只有用户消息里明确引用的路径（@、反引号或绝对路径）可以自己 read，验证命令（tsc/build/test/git diff）可以自己跑。'
+      + '\n可直接复制的派活模板（照抄填空，一行一个字段）：'
+      + (kind === 'modify'
+        ? '\nspawn_teammate：goal=<要改什么>；ctx=<文件:行、入口指针、约束>；acceptance=<测试命令与通过条件>；output=<改动文件 + diff --stat>'
+        : '\nsubagent：goal=<要查清的问题与结论>；ctx=<文件:行、入口指针、复现命令>；acceptance=<可检查的结论条件>；output=<结论 + 证据路径>'),
+    // Injected as one conversation message at the start of every Lead turn (see the turn/start branch in apply).
+    leadReminder: () => '你是团队 Lead：本步只派活或复核，不自己执行任务。'
+      + '\n禁止 read/grep/glob/write/edit，也不要用 pwsh 读写文件；查信息 → subagent，改代码 → teammate。'
+      + '\n本步产出派活消息或复核结论，而不是文件内容。',
+    leadScheduling: () => LAW_ZH,
+    leadStepBudget: limit => '本轮 Lead 步数预算已用完（每轮 ' + limit + ' 步，下一轮自动重置）。本轮不要再调查或改代码：直接派活（执行→teammate，调查→subagent）、汇总当前状态、结束本轮，等回报或用户指令。',
   },
   en: {
-    concurrency: (limit, active) => `Concurrency limit ${limit}: ${active} teammate/subagent(s) are already running. Wait for them to finish, or merge this work into an existing agent.`,
-    sleepPolling: () => 'Sleep polling for subagents is banned. A finished subagent wakes you with a message: end this turn, or use wait_agent; check progress with list_agents or team_task_list.',
+    concurrency: (limit, active) => 'Concurrency limit ' + limit + ': ' + active + ' teammate(s) are already running. Wait for them to finish, or merge this work into an existing teammate; only read-only investigation should consider a subagent.',
+    sleepPolling: () => 'Sleep polling for teammates is banned. A finished teammate wakes you with a message: end this turn, or use wait_agent; check progress with list_agents or team_task_list.',
     stepBudget: limit => `This turn's step budget is spent (${limit} steps per turn, resets next turn). Stop calling tools and output a report: done, not done, remaining; the parent decides how to continue next turn.`,
     fileBudget: (used, limit) => `This turn already wrote ${used} distinct files, hitting the per-turn limit of ${limit} (resets next turn). Stop writing files and output a report: completed changes plus the remaining file list; the parent decides how to continue next turn.`,
-    leadWrite: () => 'You are the Team Lead: do not edit files yourself. Split the change into team_task_create and use send_message to give a teammate or subagent the file list and acceptance criteria; the Lead plans, reviews, and summarizes. If you really must edit yourself, turn off "Lead cannot edit files" in Guard first.',
-    leadStepBudget: limit => `This turn's Lead step budget is spent (${limit} steps per turn, resets next turn). Stop investigating or coding: delegate, summarize the current state, and end this turn to wait for teammate reports or user instructions.`,
+    leadExecute: (tool, kind) => 'You are the Team Lead: do not execute tasks directly (' + tool + '). To inspect information or read code → use a subagent (read-only investigation); to change code or write files → use spawn_teammate to dispatch to a teammate. Only paths the user explicitly referenced in their message (@, backticks, or absolute paths) may be read by you, and verification commands (tsc/build/test/git diff) may be run by you.'
+      + '\nCopy-paste delegation template (fill in the placeholders):'
+      + (kind === 'modify'
+        ? '\nspawn_teammate: goal=<what to change>; ctx=<file:line, entry points, constraints>; acceptance=<test command and pass condition>; output=<changed files + diff --stat>'
+        : '\nsubagent: goal=<question/answer to establish>; ctx=<file:line, entry points, repro command>; acceptance=<checkable conclusion>; output=<conclusion + evidence paths>'),
+    leadReminder: () => 'You are the Team Lead: only dispatch work or review results this step.'
+      + '\nBanned: read/grep/glob/write/edit and pwsh file I/O; info → subagent, code → teammate.',
+    leadScheduling: () => LAW_EN,
+    leadStepBudget: limit => `This turn's Lead step budget is spent (${limit} steps per turn, resets next turn). Stop investigating or coding: delegate (execution → teammate, investigation → subagent), summarize the current state, and end this turn to wait for reports or user instructions.`,
   },
 }
+
+const LAW_ZH = [
+  '## 调度协议（Lead ⇄ teammate / subagent）',
+  '先判：一两次命令或 web 查询能做完 → 直接做；否则查信息/只读 → 派 subagent，执行/改代码 → 派 teammate。Lead 不直接执行任务（用户消息里明确引用的路径可读，验证命令可跑）。',
+  '',
+  '单元字段（缺项不得派）：goal / ctx（文件、入口指针）/ acceptance（可检查条件）/ output（路径+返回）/ deps / owner。',
+  '承载：有任务板用 team_task_create（subject=goal，description=ctx+acceptance+output，write_scopes 用相对路径，blocked_by=deps，reassign=owner）；无任务板写进派活消息。',
+  '',
+  '状态：draft → dispatched → reported → verifying → accepted｜rejected',
+  'dispatched 前 Lead 不动该单元；reported 含产物+自检+未决；verifying 只按 acceptance 验；rejected 写未过项，修订重派，最多退 2 次。',
+  '',
+  '不变式：I1 无 acceptance 不 dispatch；I2 accepted 前不重做；I3 一单元一 owner。',
+  '回报：任务 id / owner / 状态。例外：blocked → 补 ctx 重派，或自己接手并说明原因。',
+  '分工：subagent 只做只读调查（不写文件、不定稿）；执行与改代码一律派 teammate。',
+].join('\n')
+
+const LAW_EN = [
+  '## Scheduling protocol (Lead ⇄ teammate / subagent)',
+  'Decide first: if one or two commands or a web lookup finish it, do it yourself; otherwise, for information gathering or read-only work → dispatch a subagent, for execution or code changes → dispatch a teammate. The Lead does not execute tasks directly (paths the user explicitly referenced in their message are readable, verification commands may be run).',
+  '',
+  'Unit (missing any field → do not dispatch): goal / ctx (files, entry pointers) / acceptance (checkable condition) / output (path + what to return) / deps / owner.',
+  'Carrier: with a task board use team_task_create (subject=goal, description=ctx+acceptance+output, write_scopes relative paths, blocked_by=deps, reassign=owner); without one, put the same fields in the dispatch message.',
+  '',
+  'States: draft → dispatched → reported → verifying → accepted｜rejected',
+  'Before dispatched the Lead does not touch the unit; reported returns artifact + self-check + open questions; verifying checks only against acceptance; rejected lists failed items, revise and re-dispatch, at most 2 retries.',
+  '',
+  'Invariants: I1 no acceptance → no dispatch; I2 no redo before accepted; I3 one unit, one owner.',
+  'Report: task id / owner / state. Exception: blocked → add ctx and re-dispatch, or take over and say why.',
+  'Split: a subagent only does read-only investigation (no file writes, no final artifacts); all execution and code changes go to a teammate.',
+].join('\n')
 
 function readLanguagePreference(ctx) {
   try {
@@ -73,11 +131,11 @@ function readLanguagePreference(ctx) {
   }
 }
 
-// Matches PowerShell Start-Sleep and bash sleep with a numeric argument.
 const SLEEP_COMMAND = /Start-Sleep\s+-|\bsleep\s+\d/i
 const SPAWN_TEAMMATE = 'spawn_teammate'
 const CHILD_TOOLS = new Set([SPAWN_TEAMMATE, 'subagent', 'subagent_fork'])
-const LEAD_WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
+const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
+const LEAD_BLOCKED_TOOLS = new Set(['read', 'grep', 'glob', 'write', 'edit', 'str_replace_editor'])
 const COORDINATION_TOOLS = new Set([
   SPAWN_TEAMMATE, 'subagent', 'subagent_fork', 'send_message', 'interrupt_agent',
   'team_task_create', 'team_task_update', 'team_task_get', 'team_task_list',
@@ -96,7 +154,7 @@ function countValue(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-function resolveOptions(config) {
+export function resolveOptions(config) {
   const legacyConcurrent = readValue(config, 'maxConcurrentTeammates', undefined)
   return {
     enabled: readValue(config, 'enabled', DEFAULTS.enabled) === true,
@@ -105,6 +163,12 @@ function resolveOptions(config) {
     model: String(readValue(config, 'model', DEFAULTS.model)),
     reasoningEffort: String(readValue(config, 'reasoningEffort', DEFAULTS.reasoningEffort)).trim()
       || DEFAULTS.reasoningEffort,
+    investigateProvider: String(readValue(config, 'investigateProvider', DEFAULTS.investigateProvider)).trim(),
+    investigateModel: String(readValue(config, 'investigateModel', DEFAULTS.investigateModel)).trim(),
+    investigateReasoningEffort: String(readValue(config, 'investigateReasoningEffort', DEFAULTS.investigateReasoningEffort)).trim(),
+    executeProvider: String(readValue(config, 'executeProvider', DEFAULTS.executeProvider)).trim(),
+    executeModel: String(readValue(config, 'executeModel', DEFAULTS.executeModel)).trim(),
+    executeReasoningEffort: String(readValue(config, 'executeReasoningEffort', DEFAULTS.executeReasoningEffort)).trim(),
     inheritLeadConfig: readValue(config, 'inheritLeadConfig', DEFAULTS.inheritLeadConfig) === true,
     maxConcurrentChildren: countValue(
       readValue(config, 'maxConcurrentChildren', legacyConcurrent),
@@ -113,7 +177,11 @@ function resolveOptions(config) {
     banSleepPolling: readValue(config, 'banSleepPolling', DEFAULTS.banSleepPolling) === true,
     stepBudget: countValue(readValue(config, 'stepBudget'), DEFAULTS.stepBudget),
     maxFilesPerAgent: countValue(readValue(config, 'maxFilesPerAgent'), DEFAULTS.maxFilesPerAgent),
-    leadNoWrite: readValue(config, 'leadNoWrite', DEFAULTS.leadNoWrite) === true,
+    leadNoExecute: readValue(
+      config,
+      'leadNoExecute',
+      readValue(config, 'leadNoWrite', DEFAULTS.leadNoExecute),
+    ) === true,
     leadStepBudget: countValue(readValue(config, 'leadStepBudget'), DEFAULTS.leadStepBudget),
   }
 }
@@ -122,7 +190,6 @@ function snapshotOf(options) {
   return Object.freeze({ ...options })
 }
 
-// Mirrors delegationDepthOf: the session header wins and a runtime subagentDepth may only deepen it.
 function delegationDepth(agent) {
   try {
     const runtime = agent?.options?.subagentDepth
@@ -196,16 +263,165 @@ function filePathOf(exec) {
   return typeof path === 'string' && path !== '' ? path : ''
 }
 
-function forceRequest(request, options) {
+function forceRequest(request, route) {
   return {
     ...request,
     agentOptions: {
       ...(request.agentOptions ?? {}),
-      provider: options.provider,
-      model: options.model,
-      reasoningEffort: options.reasoningEffort,
+      provider: route.provider,
+      model: route.model,
+      reasoningEffort: route.reasoningEffort,
     },
   }
+}
+
+function childKind(ctx, spec) {
+  if (spec?.childId === undefined || spec?.childId === null) return 'investigate'
+  const teams = ctx.get('agentTeams', false)
+  if (teams === undefined) return 'base'
+  try {
+    return teams.listMembers(spec?.request?.parent).some(member => member.id === spec.childId)
+      ? 'execute'
+      : 'base'
+  } catch {
+    return 'base'
+  }
+}
+
+function routeFor(options, kind) {
+  const base = {
+    provider: options.provider,
+    model: options.model,
+    reasoningEffort: options.reasoningEffort,
+  }
+  if (kind === 'investigate') {
+    return {
+      provider: options.investigateProvider || DEFAULTS.investigateProvider,
+      model: options.investigateModel || DEFAULTS.investigateModel,
+      reasoningEffort: options.investigateReasoningEffort || DEFAULTS.investigateReasoningEffort,
+    }
+  }
+  if (kind === 'execute') {
+    return {
+      provider: options.executeProvider || DEFAULTS.executeProvider,
+      model: options.executeModel || DEFAULTS.executeModel,
+      reasoningEffort: options.executeReasoningEffort || DEFAULTS.executeReasoningEffort,
+    }
+  }
+  return base
+}
+
+const PATH_MENTION = /@(?:"([^"]+)"|'([^']+)'|([^\s"'`]+))/g
+const BACKTICK_SPAN = /`([^`]+)`/g
+const WINDOWS_ABSOLUTE_PATH = /[A-Za-z]:[\\/][^\s"'`<>|]+/g
+const TRAILING_PATH_PUNCTUATION = /[.,;:!?)\]}，。；：！？）」』】]+$/
+const URL_LIKE = /:\/\//
+const PATH_LIKE_FILENAME = /^[\w.-]+\.[A-Za-z0-9]{1,10}$/
+
+function textBlocksOf(content) {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(block => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+}
+
+export function extractReferencedPaths(text, cwd) {
+  if (typeof text !== 'string' || text === '') return []
+  const base = typeof cwd === 'string' && cwd !== '' ? cwd : process.cwd()
+  const tokens = []
+  for (const match of text.matchAll(PATH_MENTION)) {
+    const token = match[1] ?? match[2] ?? match[3]
+    if (typeof token === 'string') tokens.push(token)
+  }
+  for (const match of text.matchAll(BACKTICK_SPAN)) {
+    const span = match[1]
+    if (typeof span === 'string' && (span.includes('/') || span.includes('\\') || PATH_LIKE_FILENAME.test(span))) tokens.push(span)
+  }
+  for (const match of text.matchAll(WINDOWS_ABSOLUTE_PATH)) {
+    tokens.push(match[0])
+  }
+  const paths = []
+  const seen = new Set()
+  for (const raw of tokens) {
+    const token = raw.trim().replace(TRAILING_PATH_PUNCTUATION, '')
+    if (token === '' || URL_LIKE.test(token)) continue
+    let resolved
+    try {
+      resolved = path.normalize(path.resolve(base, token))
+    } catch {
+      continue
+    }
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    paths.push(resolved)
+  }
+  return paths
+}
+
+export function isReferencedReadPath(requestedPath, referencedPaths, cwd) {
+  if (typeof requestedPath !== 'string' || requestedPath === '') return false
+  const list = Array.isArray(referencedPaths) ? referencedPaths : []
+  if (list.length === 0) return false
+  const base = typeof cwd === 'string' && cwd !== '' ? cwd : process.cwd()
+  let requested
+  try {
+    requested = path.normalize(path.resolve(base, requestedPath))
+  } catch {
+    return false
+  }
+  const fold = process.platform === 'win32' ? value => value.toLowerCase() : value => value
+  const target = trimTrailingSeparators(fold(requested))
+  for (const reference of list) {
+    if (typeof reference !== 'string' || reference === '') continue
+    let candidate
+    try {
+      candidate = trimTrailingSeparators(fold(path.normalize(path.resolve(base, reference))))
+    } catch {
+      continue
+    }
+    if (target === candidate) return true
+    const prefix = candidate.endsWith(path.sep) ? candidate : candidate + path.sep
+    if (target.startsWith(prefix)) return true
+  }
+  return false
+}
+
+function trimTrailingSeparators(value) {
+  let trimmed = value
+  while (trimmed.length > 1) {
+    // Keep a drive root such as `D:\` intact instead of reducing it to `D:`.
+    if (/^[A-Za-z]:[\\/]$/.test(trimmed)) break
+    if (!trimmed.endsWith(path.sep)) break
+    trimmed = trimmed.slice(0, -1)
+  }
+  return trimmed
+}
+
+function isUserReferencedRead(exec, agent, referencedPathsBySession) {
+  const filePath = filePathOf(exec)
+  if (filePath === '') return false
+  const session = agent?.session
+  const sessionId = session?.id
+  if (sessionId === undefined) return false
+  const cwd = session.header?.cwd ?? process.cwd()
+  let referenced = referencedPathsBySession.get(sessionId)
+  if (referenced === undefined) {
+    // Backfill from the session history the first time it is checked, so a read
+    // that happens before any live user/message event still sees @-mentions.
+    referenced = new Set()
+    try {
+      for (const message of session.deriveMessages()) {
+        if (message?.role !== 'user' || message?.source?.kind !== 'user') continue
+        const text = textBlocksOf(message.content)
+        if (text === '') continue
+        for (const referencedPath of extractReferencedPaths(text, cwd)) referenced.add(referencedPath)
+      }
+    } catch {
+    }
+    referencedPathsBySession.set(sessionId, referenced)
+  }
+  return isReferencedReadPath(filePath, [...referenced], cwd)
 }
 
 function rememberChild(childrenByParent, parentOfChild, parent, childId) {
@@ -243,7 +459,7 @@ function activeChildCount(childrenByParent, parentId) {
   return children === undefined ? 0 : children.size
 }
 
-function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent, text) {
+function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent, referencedPathsBySession, text) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
@@ -279,8 +495,7 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
     }
   }
 
-  // Every file-writing tool counts: write, edit, and str_replace_editor (whose `path` argument filePathOf handles).
-  if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && LEAD_WRITE_TOOLS.has(exec.name)) {
+  if (options.maxFilesPerAgent > 0 && delegationDepth(agent) >= 1 && WRITE_TOOLS.has(exec.name)) {
     const sessionId = agent.session?.id
     const path = filePathOf(exec)
     if (sessionId !== undefined && path !== '') {
@@ -298,9 +513,11 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
 
   const leadingTeam = isTeamLead(ctx, agent)
     || (options.scope === 'all' && delegationDepth(agent) === 0)
-  if (leadingTeam && options.leadNoWrite && LEAD_WRITE_TOOLS.has(exec.name)) {
-    ctx.logger.info('[agent-guard] denied %s: team lead must delegate file writes', exec.name)
-    return text('leadWrite')
+  if (leadingTeam && options.leadNoExecute && LEAD_BLOCKED_TOOLS.has(exec.name)) {
+    if (exec.name !== 'read' || !isUserReferencedRead(exec, agent, referencedPathsBySession)) {
+      ctx.logger.info('[agent-guard] denied %s: team lead must delegate task execution', exec.name)
+      return text('leadExecute', exec.name, WRITE_TOOLS.has(exec.name) ? 'modify' : 'inspect')
+    }
   }
 
   if (leadingTeam && options.leadStepBudget > 0 && !COORDINATION_TOOLS.has(exec.name)) {
@@ -326,18 +543,20 @@ export function apply(ctx, config = {}) {
   } else {
     const guarded = async function startActivation(spec) {
       const options = resolveOptions(config)
+      const kind = childKind(ctx, spec)
+      const route = routeFor(options, kind)
       const forced = options.enabled === true
         && options.inheritLeadConfig !== true
         && (options.scope === 'all' || isTeamLead(ctx, spec?.request?.parent))
       if (forced) {
         ctx.logger.info(
-          '[agent-guard] overriding subagent start options %s/%s effort=%s scope=%s',
-          options.provider, options.model, options.reasoningEffort, options.scope,
+          '[agent-guard] overriding subagent start options kind=%s %s/%s effort=%s scope=%s',
+          kind, route.provider, route.model, route.reasoningEffort, options.scope,
         )
       }
       const activation = await original.call(
         this,
-        forced ? { ...spec, request: forceRequest(spec.request, options) } : spec,
+        forced ? { ...spec, request: forceRequest(spec.request, route) } : spec,
       )
       rememberChild(childrenByParent, parentOfChild, spec?.request?.parent, activation?.childId)
       return activation
@@ -356,23 +575,94 @@ export function apply(ctx, config = {}) {
     forgetChild(childrenByParent, parentOfChild, info?.id)
   })
 
-  // Step and file budgets reset on turn/start.
   const stepCounts = new Map()
   const filesBySession = new Map()
+  const referencedPathsBySession = new Map()
+  // Invariant: DSH forces agent.id to be the shared agent/session identity (Agent.id is a
+  // SessionId, and AgentRegistry.get documents its argument as "the shared agent/session id"),
+  // so agent.id is the primary key here and the session.id from session/event resolves the
+  // same entry. The live registry is only needed when agent/created predates this plugin.
+  const agentsById = new Map()
+  const lastInjectedTurnBySession = new Map()
+  const missingAgentWarned = new Set()
+  ctx.on('agent/created', ({ agent }) => {
+    const agentId = agent?.id
+    if (agentId === undefined) return
+    agentsById.set(agentId, agent)
+  })
+  ctx.on('agent/disposed', ({ agent }) => {
+    const agentId = agent?.id
+    if (agentId === undefined) return
+    if (agentsById.get(agentId) === agent) agentsById.delete(agentId)
+    lastInjectedTurnBySession.delete(agentId)
+    missingAgentWarned.delete(agentId)
+  })
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
     if (event.type === 'turn/start') {
       stepCounts.set(id, 0)
       filesBySession.delete(id)
+      injectLeadReminder(id, event.data)
     } else if (event.type === 'step/start') {
       stepCounts.set(id, (stepCounts.get(id) ?? 0) + 1)
+    } else if (event.type === 'user/message' && event.data?.source?.kind === 'user') {
+      const cwd = session.header?.cwd ?? process.cwd()
+      const text = textBlocksOf(event.data.content)
+      if (text === '') return
+      let referenced = referencedPathsBySession.get(id)
+      if (referenced === undefined) {
+        referenced = new Set()
+        referencedPathsBySession.set(id, referenced)
+      }
+      for (const referencedPath of extractReferencedPaths(text, cwd)) referenced.add(referencedPath)
     }
   })
+  // Hot reload can mount this plugin after an agent was created, in which case agent/created was
+  // never observed here: fall back to the live AgentRegistry, which is queried by the same
+  // shared agent/session id. A permanent miss is logged once per session instead of every turn.
+  function liveAgentFor(sessionId) {
+    const known = agentsById.get(sessionId)
+    if (known !== undefined) return known
+    const registry = ctx.get('agents', false)
+    const agent = typeof registry?.get === 'function' ? registry.get(sessionId) : undefined
+    if (agent !== undefined) agentsById.set(sessionId, agent)
+    return agent
+  }
+  function injectLeadReminder(sessionId, turnPayload) {
+    const agent = liveAgentFor(sessionId)
+    if (agent === undefined) {
+      if (!missingAgentWarned.has(sessionId)) {
+        missingAgentWarned.add(sessionId)
+        ctx.logger.warn('[agent-guard] no live agent for session %s; skipping the lead reminder injection', String(sessionId).slice(0, 8))
+      }
+      return
+    }
+    const options = resolveOptions(config)
+    const leadingTeam = isTeamLead(ctx, agent)
+      || (options.scope === 'all' && delegationDepth(agent) === 0)
+    if (!(options.enabled && options.leadNoExecute && leadingTeam)) return
+    const turn = turnPayload?.turn
+    if (typeof turn !== 'number' || turn <= (lastInjectedTurnBySession.get(sessionId) ?? 0)) return
+    lastInjectedTurnBySession.set(sessionId, turn)
+    try {
+      agent.inject(createUserMessage({
+        content: [{ type: 'text', text: text('leadReminder') }],
+        source: { kind: 'agent-guard' },
+      }))
+    } catch (error) {
+      lastInjectedTurnBySession.delete(sessionId)
+      ctx.logger.warn('[agent-guard] could not inject the lead reminder for turn %d: %s', turn, String(error))
+    }
+  }
   ctx.on('session/disposed', (session) => {
     if (session?.id === undefined) return
     stepCounts.delete(session.id)
     filesBySession.delete(session.id)
+    referencedPathsBySession.delete(session.id)
+    agentsById.delete(session.id)
+    lastInjectedTurnBySession.delete(session.id)
+    missingAgentWarned.delete(session.id)
     childrenByParent.delete(session.id)
     forgetChild(childrenByParent, parentOfChild, session.id)
   })
@@ -384,8 +674,17 @@ export function apply(ctx, config = {}) {
   }
   ctx.on('settings/document-updated', () => { language.value = undefined })
 
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.effect(() => promptCtx.systemPrompt.section({
+      name: 'lead-scheduling',
+      // 10300 sorts after every first-party section (last named: DEPLOYMENT_PERSONA_SUFFIX = 10200), so this section is appended at the tail of the single system prompt instead of the opening segment.
+      order: 10300,
+      text: () => text('leadScheduling'),
+    }), 'agent-guard.leadScheduling()')
+  })
+
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent, text)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent, referencedPathsBySession, text)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
