@@ -1,9 +1,6 @@
 export interface GuardConfig {
   enabled: boolean
   scope: 'team' | 'all'
-  provider: string
-  model: string
-  reasoningEffort: string
   investigateProvider: string
   investigateModel: string
   investigateReasoningEffort: string
@@ -22,9 +19,6 @@ export interface GuardConfig {
 export const DEFAULT_GUARD: GuardConfig = {
   enabled: true,
   scope: 'team',
-  provider: 'deepseek-account',
-  model: 'deepseek-flash',
-  reasoningEffort: 'low',
   investigateProvider: 'deepseek-account',
   investigateModel: 'deepseek-flash',
   investigateReasoningEffort: 'high',
@@ -44,10 +38,6 @@ function count(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-function text(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value !== '' ? value : fallback
-}
-
 function groupText(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
 }
@@ -58,9 +48,6 @@ export function normalizeGuard(raw: unknown): GuardConfig {
   return {
     enabled: typeof value.enabled === 'boolean' ? value.enabled : DEFAULT_GUARD.enabled,
     scope: value.scope === 'all' || value.scope === 'team' ? value.scope : DEFAULT_GUARD.scope,
-    provider: text(value.provider, DEFAULT_GUARD.provider),
-    model: text(value.model, DEFAULT_GUARD.model),
-    reasoningEffort: text(value.reasoningEffort, DEFAULT_GUARD.reasoningEffort),
     investigateProvider: groupText(value.investigateProvider, DEFAULT_GUARD.investigateProvider),
     investigateModel: groupText(value.investigateModel, DEFAULT_GUARD.investigateModel),
     investigateReasoningEffort: groupText(
@@ -73,10 +60,7 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     inheritLeadConfig: typeof value.inheritLeadConfig === 'boolean'
       ? value.inheritLeadConfig
       : DEFAULT_GUARD.inheritLeadConfig,
-    maxConcurrentChildren: count(
-      value.maxConcurrentChildren ?? value.maxConcurrentTeammates,
-      DEFAULT_GUARD.maxConcurrentChildren,
-    ),
+    maxConcurrentChildren: count(value.maxConcurrentChildren, DEFAULT_GUARD.maxConcurrentChildren),
     banSleepPolling: typeof value.banSleepPolling === 'boolean' ? value.banSleepPolling : DEFAULT_GUARD.banSleepPolling,
     stepBudget: count(value.stepBudget, DEFAULT_GUARD.stepBudget),
     maxFilesPerAgent: count(value.maxFilesPerAgent, DEFAULT_GUARD.maxFilesPerAgent),
