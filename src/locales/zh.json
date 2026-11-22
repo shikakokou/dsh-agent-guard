@@ -61,5 +61,7 @@
   "hint": "保存后立即生效。",
   "dialogAria": "agent-guard 配置",
   "drawerTitle": "Agent 守卫设置",
-  "close": "关闭"
+  "close": "关闭",
+  "subagentTag": "子 Agent",
+  "subagentTagTitle": "当前输入框属于子 Agent 会话，消息只会发给这个子 Agent。"
 }

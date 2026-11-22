@@ -759,6 +759,28 @@ function GuardDock(props: PanelProps): React.ReactElement {
   )
 }
 
+interface ChildTagProps extends SlotProps {
+  t: Translate
+  useLocale: () => number
+}
+
+function GuardChildTag(props: ChildTagProps): React.ReactElement | null {
+  const { t, useLocale } = props
+  useLocale()
+  const useSession = props.useSession
+  const subagent = typeof useSession === 'function'
+    ? useSession(snapshot => snapshot.subagent ?? null)
+    : null
+  if (subagent === null) return null
+  const mode = subagent.address?.mode
+  return (
+    <span className="ag-child-tag" data-mode={mode} title={t('subagentTagTitle')}>
+      <span className="ag-child-tag-dot" aria-hidden="true" />
+      {t('subagentTag')}
+    </span>
+  )
+}
+
 export const inject = ['slots', 'configForms', 'locale']
 
 export function apply(ctx: ClientContext): void {
@@ -781,5 +803,10 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register(
     { name: 'conversation.input.left', id: NS, order: 40 },
     (props: SlotProps) => <GuardDock {...props} form={form} t={t} useLocale={useLocale} />
+  ))
+
+  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register(
+    { name: 'conversation.input.overlay', id: `${NS}:child`, order: 0 },
+    (props: SlotProps) => <GuardChildTag {...props} t={t} useLocale={useLocale} />
   ))
 }

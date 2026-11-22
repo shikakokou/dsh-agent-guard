@@ -579,3 +579,35 @@
   font-size: 11px;
   line-height: 16px;
 }
+
+.ag-child-tag {
+  position: absolute;
+  top: 8px;
+  left: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-state-warning-secondary, #e0a23c);
+  border-radius: 999px;
+  background: var(--dsw-alias-state-warning-tertiary, #fff4e5);
+  color: var(--dsw-alias-state-warning-primary, #9a5b00);
+  font: 11px/18px ui-sans-serif, system-ui, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ag-child-tag-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+[data-composer-card]:has(.ag-child-tag) {
+  padding-top: 34px;
+}

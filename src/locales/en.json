@@ -61,5 +61,7 @@
   "hint": "Applied as soon as you save.",
   "dialogAria": "agent-guard settings",
   "drawerTitle": "Agent Warden settings",
-  "close": "Close"
+  "close": "Close",
+  "subagentTag": "Subagent",
+  "subagentTagTitle": "This composer belongs to a subagent — messages go to it, not the lead agent."
 }
