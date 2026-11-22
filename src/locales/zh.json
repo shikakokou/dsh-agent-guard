@@ -44,7 +44,7 @@
   "contractHint": "子 agent 每轮请求都会带上这段契约，文案修改或上下文压缩后会重新同步。",
   "leadReminderHint": "主会话每轮开始时收到一次这条提醒，仅在开启 Lead 门禁时发送。",
   "textDefaultHint": "留空使用内置英文默认",
-  "promptDefaultHint": "留空保存则使用内置英文默认",
+  "promptDefaultHint": "留空保存则使用内置默认 Prompt",
   "scopeTeam": "仅团队模式",
   "scopeAll": "所有 agent（含主会话）",
   "fieldBanSleep": "禁止 sleep 轮询",

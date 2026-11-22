@@ -502,6 +502,10 @@
   text-wrap: balance;
 }
 
+.ag-note.ag-prompt-default-hint {
+  margin-bottom: 8px;
+}
+
 .ag-help {
   display: inline-flex;
   align-items: center;

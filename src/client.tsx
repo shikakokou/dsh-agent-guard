@@ -649,7 +649,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                 disabled={!editable}
                 onChange={value => patch('leadReminderText', value)}
               />
-              <div className="ag-note ag-note-left">{t('promptDefaultHint')}</div>
+              <div className="ag-note ag-note-left ag-prompt-default-hint">{t('promptDefaultHint')}</div>
             </div>
             ) : (
             <div className="ag-tab-panel" role="tabpanel" id="ag-panel-rules" aria-labelledby="ag-tab-rules">

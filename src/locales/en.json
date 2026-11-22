@@ -44,7 +44,7 @@
   "contractHint": "Every subagent request carries this contract; edits or context compaction re-sync it.",
   "leadReminderHint": "The main session gets this reminder once per turn, only with the Lead gate on.",
   "textDefaultHint": "Leave empty to use the built-in English default",
-  "promptDefaultHint": "Leave empty and save to use the built-in English default",
+  "promptDefaultHint": "Leave empty to use the built-in default prompt",
   "scopeTeam": "Team mode only",
   "scopeAll": "All agents (incl. main sessions)",
   "fieldBanSleep": "Ban sleep polling",
