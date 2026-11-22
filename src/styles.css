@@ -265,6 +265,10 @@
   white-space: nowrap;
 }
 
+.ag-lead-no-execute {
+  margin-bottom: 8px;
+}
+
 .ag-input,
 .ag-select {
   width: 176px;

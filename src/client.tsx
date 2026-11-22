@@ -127,10 +127,10 @@ function HelpTip({ text }: { text: string }): React.ReactElement {
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }): React.ReactElement {
+function Field({ label, hint, children, labelClassName }: { label: string; hint?: string; children: React.ReactNode; labelClassName?: string }): React.ReactElement {
   return (
     <label className="ag-field">
-      <span className="ag-field-label">
+      <span className={labelClassName === undefined ? 'ag-field-label' : `ag-field-label ${labelClassName}`}>
         {label}
         {hint !== undefined ? <HelpTip text={hint} /> : null}
       </span>
@@ -612,7 +612,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('banSleepPolling', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldLeadExecute')} hint={t('leadExecuteHint')}>
+              <Field label={t('fieldLeadExecute')} hint={t('leadExecuteHint')} labelClassName="ag-lead-no-execute">
                 <input
                   type="checkbox"
                   className="ag-check"
@@ -621,21 +621,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('leadNoExecute', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldLeadBudget')}>
-                <span className="ag-number">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="ag-input"
-                    value={current.leadStepBudget}
-                    disabled={!editable}
-                    onChange={event => patch('leadStepBudget', Number(event.target.value))}
-                  />
-                  <span className="ag-unit">{t('unitSteps')}</span>
-                </span>
-              </Field>
-              <div className="ag-note">{t('zeroUnlimited')}</div>
             </Section>
             </div>
             ) : tab === 'prompt' ? (
@@ -717,6 +702,17 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   )
                 })}
               </div>
+            </Section>
+
+            <Section title="Lead">
+              <Field label={t('fieldLeadBudget')} hint={t('zeroUnlimited')}>
+                <BudgetNumberInput
+                  value={current.leadStepBudget}
+                  disabled={!editable}
+                  ariaLabel={t('fieldLeadBudget')}
+                  onChange={value => patch('leadStepBudget', value)}
+                />
+              </Field>
             </Section>
             </div>
             )}
