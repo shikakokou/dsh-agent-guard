@@ -21,6 +21,7 @@ export interface ConfigForm<T> {
   getSnapshot(): ConfigFormSnapshot<T>
   subscribe(listener: () => void): () => void
   set(field: string, value: unknown): Promise<boolean>
+  unset(field: string): Promise<boolean>
 }
 
 export interface ConfigFormsApi {
