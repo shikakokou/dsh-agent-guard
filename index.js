@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import path from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -45,7 +46,7 @@ const DEFAULTS = {
 
 const COPY = {
   zh: {
-    concurrency: (limit, active) => '并发上限 ' + limit + '：当前已有 ' + active + ' 个 subagent 在运行。等它们结束，或把任务合并给现有 subagent。',
+    concurrency: (limit, active) => '并发上限 ' + limit + '：当前已有 ' + active + ' 个 subagent 在运行或等待启动。等它们结束，或把任务合并给现有 subagent。',
     delegationName: (tool, name) => '委派名字不合规（' + tool + '）：'
       + (name === '' ? '缺少 name。' : 'name=' + name + ' 不合规。')
       + '规则：以 exec-（执行）或 probe-（只读调查）开头，后面只接小写字母、数字、连字符，总长不超过 32，例如 name=exec-fix-auth、name=probe-locate-handler。',
@@ -65,7 +66,7 @@ const COPY = {
     leadStepBudget: limit => '本轮 Lead 步数预算已用完（每轮 ' + limit + ' 步，下一轮自动重置）。本轮不要再调查或改代码：直接委派（一律委派给 subagent）、汇总当前状态、结束本轮，等回报或用户指令。',
   },
   en: {
-    concurrency: (limit, active) => 'Concurrency limit ' + limit + ': ' + active + ' subagent(s) are already running. Wait for them to finish, or merge this work into an existing subagent.',
+    concurrency: (limit, active) => 'Concurrency limit ' + limit + ': ' + active + ' subagent(s) are already running or starting. Wait for them to finish, or merge this work into an existing subagent.',
     delegationName: (tool, name) => 'Delegation name is not conforming (' + tool + '): '
       + (name === '' ? 'name is missing. ' : 'name=' + name + ' is not conforming. ')
       + 'Rule: start with exec- (execution) or probe- (read-only investigation), then only lowercase letters, digits and hyphens, at most 32 characters in total, e.g. name=exec-fix-auth or name=probe-locate-handler.',
@@ -206,10 +207,6 @@ function isTeamLead(ctx, agent) {
   } catch {
     return false
   }
-}
-
-function activeConcurrent(lead, childrenByParent) {
-  return activeChildCount(childrenByParent, lead?.session?.id)
 }
 
 function commandOf(exec) {
@@ -375,42 +372,126 @@ function isUserReferencedRead(exec, agent, referencedPathsBySession) {
   return isReferencedReadPath(filePath, [...referenced], cwd)
 }
 
-function rememberChild(childrenByParent, parentOfChild, parent, childId) {
-  const parentId = parent?.session?.id
-  if (parentId === undefined || childId === undefined) return
-  let children = childrenByParent.get(parentId)
-  if (children === undefined) {
-    children = new Set()
-    childrenByParent.set(parentId, children)
-  }
-  children.add(childId)
-  parentOfChild.set(childId, parentId)
+function reservationKey(exec) {
+  return exec?.token ?? exec?.signal ?? exec?.callId ?? exec
 }
 
-function forgetChild(childrenByParent, parentOfChild, childId) {
-  if (childId === undefined) return
-  const parentId = parentOfChild.get(childId)
-  parentOfChild.delete(childId)
-  if (parentId !== undefined) {
-    const children = childrenByParent.get(parentId)
-    if (children !== undefined) {
-      children.delete(childId)
-      if (children.size === 0) childrenByParent.delete(parentId)
+export function createConcurrencyLedger() {
+  const activeByParent = new Map()
+  const parentOfChild = new Map()
+  const pendingByToken = new Map()
+  const pendingByParent = new Map()
+
+  function pendingTokens(parentId) {
+    let tokens = pendingByParent.get(parentId)
+    if (tokens === undefined) {
+      tokens = new Set()
+      pendingByParent.set(parentId, tokens)
     }
-    return
+    return tokens
   }
-  for (const [ownerId, children] of childrenByParent) {
-    children.delete(childId)
-    if (children.size === 0) childrenByParent.delete(ownerId)
+
+  function activeCount(parentId) {
+    const children = parentId === undefined ? undefined : activeByParent.get(parentId)
+    return children === undefined ? 0 : children.size
+  }
+
+  function pendingCount(parentId) {
+    const tokens = parentId === undefined ? undefined : pendingByParent.get(parentId)
+    return tokens === undefined ? 0 : tokens.size
+  }
+
+  function reserve(token, parentId, signal) {
+    if (token === undefined || parentId === undefined) return false
+    if (pendingByToken.has(token)) return false
+    pendingByToken.set(token, { parentId, signal })
+    pendingTokens(parentId).add(token)
+    return true
+  }
+
+  function release(token) {
+    if (token === undefined) return false
+    const pending = pendingByToken.get(token)
+    if (pending === undefined) return false
+    pendingByToken.delete(token)
+    const tokens = pendingByParent.get(pending.parentId)
+    if (tokens !== undefined) {
+      tokens.delete(token)
+      if (tokens.size === 0) pendingByParent.delete(pending.parentId)
+    }
+    return true
+  }
+
+  function clearParent(parentId) {
+    if (parentId === undefined) return
+    activeByParent.delete(parentId)
+    const tokens = pendingByParent.get(parentId)
+    if (tokens === undefined) return
+    for (const token of tokens) pendingByToken.delete(token)
+    pendingByParent.delete(parentId)
+  }
+
+  return {
+    rememberChild(parent, childId) {
+      const parentId = parent?.session?.id
+      if (parentId === undefined || childId === undefined) return
+      let children = activeByParent.get(parentId)
+      if (children === undefined) {
+        children = new Set()
+        activeByParent.set(parentId, children)
+      }
+      children.add(childId)
+      parentOfChild.set(childId, parentId)
+    },
+    forgetChild(childId) {
+      if (childId === undefined) return
+      const parentId = parentOfChild.get(childId)
+      parentOfChild.delete(childId)
+      if (parentId !== undefined) {
+        const children = activeByParent.get(parentId)
+        if (children !== undefined) {
+          children.delete(childId)
+          if (children.size === 0) activeByParent.delete(parentId)
+        }
+        return
+      }
+      for (const [ownerId, children] of activeByParent) {
+        children.delete(childId)
+        if (children.size === 0) activeByParent.delete(ownerId)
+      }
+    },
+    activeCount,
+    pendingCount,
+    inFlightCount(parentId) {
+      return activeCount(parentId) + pendingCount(parentId)
+    },
+    activeTotal() {
+      let total = 0
+      for (const children of activeByParent.values()) total += children.size
+      return total
+    },
+    pendingTotal() {
+      return pendingByToken.size
+    },
+    pendingParentOf(token) {
+      return pendingByToken.get(token)?.parentId
+    },
+    findBySignal(parentId, signal) {
+      if (parentId === undefined || signal === null || typeof signal !== 'object') return undefined
+      const tokens = pendingByParent.get(parentId)
+      if (tokens === undefined) return undefined
+      for (const token of tokens) {
+        if (pendingByToken.get(token)?.signal === signal) return token
+      }
+      return undefined
+    },
+    reserve,
+    release,
+    clearParent,
   }
 }
 
-function activeChildCount(childrenByParent, parentId) {
-  const children = parentId === undefined ? undefined : childrenByParent.get(parentId)
-  return children === undefined ? 0 : children.size
-}
-
-function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByParent, referencedPathsBySession, text) {
+function refusalFor(ctx, exec, options, stepCounts, filesBySession, ledger, referencedPathsBySession, text) {
   const agent = exec?.agent
   if (agent === undefined || options.enabled !== true) return undefined
 
@@ -425,22 +506,12 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
     }
   }
 
-  if (CHILD_TOOLS.has(exec.name)
-    && options.maxConcurrentChildren > 0
-    && (options.scope === 'all' || isTeamLead(ctx, agent))) {
-    const active = activeConcurrent(agent, childrenByParent)
-    if (active >= options.maxConcurrentChildren) {
-      ctx.logger.info('[agent-guard] denied %s: active children %d >= limit %d', exec.name, active, options.maxConcurrentChildren)
-      return text('concurrency', options.maxConcurrentChildren, active)
-    }
-  }
-
   if (options.banSleepPolling === true && (exec.name === 'pwsh' || exec.name === 'bash')) {
     const command = commandOf(exec)
     if (command !== '' && SLEEP_COMMAND.test(command)) {
       const inScope = options.scope === 'all' || isTeamLead(ctx, agent)
       const busy = options.scope === 'all'
-        || activeChildCount(childrenByParent, agent.session?.id) > 0
+        || ledger.activeCount(agent.session?.id) > 0
       if (inScope && busy) {
         ctx.logger.info('[agent-guard] denied sleep polling: %s', command.replace(/\s+/g, ' ').slice(0, 80))
         return text('sleepPolling')
@@ -491,12 +562,32 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, childrenByPa
     }
   }
 
+  // Reserve last so calls refused above never hold a slot. The reservation is
+  // synchronous, so every pre-execute in one assistant step sees the previous
+  // reservations before any activation has started.
+  if (CHILD_TOOLS.has(exec.name)
+    && options.maxConcurrentChildren > 0
+    && (options.scope === 'all' || isTeamLead(ctx, agent))) {
+    const parentId = agent.session?.id
+    const active = ledger.activeCount(parentId)
+    const pending = ledger.pendingCount(parentId)
+    const inFlight = active + pending
+    if (inFlight >= options.maxConcurrentChildren
+      || (parentId !== undefined && !ledger.reserve(reservationKey(exec), parentId, exec.signal))) {
+      ctx.logger.info(
+        '[agent-guard] denied %s: in-flight children %d >= limit %d',
+        exec.name, inFlight, options.maxConcurrentChildren,
+      )
+      return text('concurrency', options.maxConcurrentChildren, inFlight)
+    }
+  }
+
   return undefined
 }
 
 export function apply(ctx, config = {}) {
-  const childrenByParent = new Map()
-  const parentOfChild = new Map()
+  const ledger = createConcurrencyLedger()
+  const toolCall = new AsyncLocalStorage()
   const subagents = ctx.subagents
   const original = subagents?.startActivation
   if (typeof original !== 'function') {
@@ -506,26 +597,40 @@ export function apply(ctx, config = {}) {
       const options = resolveOptions(config)
       const name = typeof spec?.name === 'string' ? spec.name : ''
       const callerDelivered = spec?.delivery === 'caller'
-      if (options.enabled === true && !callerDelivered && !DELEGATION_NAME.test(name)) {
-        throw new Error('agent-guard: ' + text('delegationName', 'startActivation', name))
+      const parentId = spec?.parent?.session?.id
+      const call = toolCall.getStore()
+      let reservation
+      if (call !== undefined && call.parentId === parentId) {
+        if (ledger.pendingParentOf(call.token) === parentId) reservation = call.token
+      } else if (call === undefined) {
+        reservation = ledger.findBySignal(parentId, spec?.signal)
       }
-      const kind = childKind(spec)
-      const route = routeFor(options, kind)
-      const forced = options.enabled === true
-        && options.inheritLeadConfig !== true
-        && route !== undefined
-      if (forced) {
-        ctx.logger.info(
-          '[agent-guard] overriding subagent start options kind=%s %s/%s effort=%s scope=%s',
-          kind, route.provider, route.model, route.reasoningEffort, options.scope,
+      try {
+        if (options.enabled === true && !callerDelivered && !DELEGATION_NAME.test(name)) {
+          throw new Error('agent-guard: ' + text('delegationName', 'startActivation', name))
+        }
+        const kind = childKind(spec)
+        const route = routeFor(options, kind)
+        const forced = options.enabled === true
+          && options.inheritLeadConfig !== true
+          && route !== undefined
+        if (forced) {
+          ctx.logger.info(
+            '[agent-guard] overriding subagent start options kind=%s %s/%s effort=%s scope=%s',
+            kind, route.provider, route.model, route.reasoningEffort, options.scope,
+          )
+        }
+        const activation = await original.call(
+          this,
+          forced ? { ...spec, agentOptions: forceAgentOptions(spec?.agentOptions, route) } : spec,
         )
+        ledger.rememberChild(spec?.parent, activation?.childId)
+        if (reservation !== undefined) ledger.release(reservation)
+        return activation
+      } catch (error) {
+        if (reservation !== undefined) ledger.release(reservation)
+        throw error
       }
-      const activation = await original.call(
-        this,
-        forced ? { ...spec, agentOptions: forceAgentOptions(spec?.agentOptions, route) } : spec,
-      )
-      rememberChild(childrenByParent, parentOfChild, spec?.parent, activation?.childId)
-      return activation
     }
     subagents.startActivation = guarded
     if (subagents.startActivation !== guarded) {
@@ -537,8 +642,19 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // Carry the exact tool-call token into the tool body so startActivation can
+  // consume the reservation made by this call's pre-execute, not a sibling's.
+  ctx.on('tools/execute', (exec, next) => {
+    if (!CHILD_TOOLS.has(exec.name)) return next()
+    return toolCall.run({ token: reservationKey(exec), parentId: exec.agent?.session?.id }, () => next())
+  })
+
+  ctx.on('tools/result', (exec) => {
+    if (CHILD_TOOLS.has(exec.name)) ledger.release(reservationKey(exec))
+  })
+
   ctx.on('subagent/end', (info) => {
-    forgetChild(childrenByParent, parentOfChild, info?.id)
+    ledger.forgetChild(info?.id)
   })
 
   const stepCounts = new Map()
@@ -601,8 +717,8 @@ export function apply(ctx, config = {}) {
     filesBySession.delete(session.id)
     referencedPathsBySession.delete(session.id)
     lastInjectedTurnBySession.delete(session.id)
-    childrenByParent.delete(session.id)
-    forgetChild(childrenByParent, parentOfChild, session.id)
+    ledger.clearParent(session.id)
+    ledger.forgetChild(session.id)
   })
 
   const language = { value: undefined }
@@ -621,7 +737,7 @@ export function apply(ctx, config = {}) {
   })
 
   ctx.on('tools/pre-execute', async (exec, next) => {
-    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, childrenByParent, referencedPathsBySession, text)
+    const reason = refusalFor(ctx, exec, resolveOptions(config), stepCounts, filesBySession, ledger, referencedPathsBySession, text)
     if (reason !== undefined) return { kind: 'deny', reason }
     return next()
   }, { prepend: true })
