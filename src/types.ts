@@ -21,6 +21,7 @@ export interface ConfigForm<T> {
   getSnapshot(): ConfigFormSnapshot<T>
   subscribe(listener: () => void): () => void
   set(field: string, value: unknown): Promise<boolean>
+  unset(field: string): Promise<boolean>
 }
 
 export interface ConfigFormsApi {
@@ -49,6 +50,20 @@ export interface ClientContext {
 
 export type UseProjection = (key: string, selector?: (value: unknown) => unknown) => unknown
 
+export interface SubagentAddress {
+  readonly mode?: 'continuable' | 'one-shot' | 'unknown'
+  readonly parentSessionId?: string
+  readonly childSessionId?: string
+}
+
+export interface SessionSnapshotLike {
+  readonly subagent?: { readonly address?: SubagentAddress } | null
+}
+
+export type UseSession = <T>(selector: (snapshot: SessionSnapshotLike) => T) => T
+
 export interface SlotProps {
   readonly useProjection?: UseProjection
+  readonly useSession?: UseSession
+  readonly sessionId?: string
 }

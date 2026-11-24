@@ -1,18 +1,28 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { DEFAULT_GUARD, normalizeGuard } from './guard.ts'
-import type { GuardConfig } from './guard.ts'
+import type { AgentBudget, GuardConfig } from './guard.ts'
 import en from './locales/en.json'
 import zh from './locales/zh.json'
-import { computePlacement } from './placement.ts'
-import type { Placement } from './placement.ts'
 import styles from './styles.css?raw'
 import type { ClientContext, ConfigForm, SlotProps, Translate } from './types.ts'
 
 const NS = 'dsh-agent-guard'
 const ENTRY_ID = 'agent-guard'
-const PANEL_WIDTH = 340
+const DRAWER_EXIT_MS = 220
+const TEXT_KEYS: ReadonlySet<keyof GuardConfig> = new Set([
+  'leadSchedulingText',
+  'contractText',
+  'leadReminderText',
+])
 const REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const
+const TABS = [
+  { key: 'general', label: 'tabGeneral' },
+  { key: 'prompt', label: 'tabPrompt' },
+  { key: 'rules', label: 'tabRules' },
+] as const
+type TabKey = typeof TABS[number]['key']
+const BUDGET_PREFIXES = ['probe-', 'exec-'] as const
 
 interface ModelSelectionView {
   provider?: string
@@ -48,61 +58,6 @@ function useFallbackConfig(props: SlotProps): GuardConfig {
   const useProjection = props.useProjection
   const raw = typeof useProjection === 'function' ? useProjection('agentGuard') : undefined
   return normalizeGuard(raw)
-}
-
-function useAnchorPlacement(
-  open: boolean,
-  anchor: React.RefObject<HTMLButtonElement | null>,
-  panel: React.RefObject<HTMLDivElement | null>
-): Placement | null {
-  const [placement, setPlacement] = useState<Placement | null>(null)
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setPlacement(null)
-      return undefined
-    }
-    const place = (): void => {
-      const element = panel.current
-      const trigger = anchor.current
-      if (element === null || trigger === null) return
-      const rect = trigger.getBoundingClientRect()
-      let height = element.offsetHeight
-      for (const child of Array.from(element.children)) {
-        if (!(child instanceof HTMLElement)) continue
-        height += Math.max(0, child.scrollHeight - child.clientHeight)
-      }
-      const next = computePlacement(
-        { left: rect.left, top: rect.top, bottom: rect.bottom, right: rect.right },
-        { width: element.offsetWidth || PANEL_WIDTH, height },
-        { width: window.innerWidth, height: window.innerHeight }
-      )
-      setPlacement(current =>
-        current !== null &&
-        current.left === next.left &&
-        current.top === next.top &&
-        current.maxHeight === next.maxHeight
-          ? current
-          : next
-      )
-    }
-    place()
-    const onScroll = (event: Event): void => {
-      if (event.target instanceof Node && panel.current?.contains(event.target) === true) return
-      place()
-    }
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', onScroll, true)
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null
-    if (panel.current !== null) observer?.observe(panel.current)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', onScroll, true)
-      observer?.disconnect()
-    }
-  }, [open, anchor, panel])
-
-  return placement
 }
 
 const HELP_TIP_WIDTH = 240
@@ -172,14 +127,39 @@ function HelpTip({ text }: { text: string }): React.ReactElement {
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }): React.ReactElement {
+function Field({ label, hint, children, labelClassName }: { label: string; hint?: string; children: React.ReactNode; labelClassName?: string }): React.ReactElement {
   return (
     <label className="ag-field">
-      <span className="ag-field-label">
+      <span className={labelClassName === undefined ? 'ag-field-label' : `ag-field-label ${labelClassName}`}>
         {label}
         {hint !== undefined ? <HelpTip text={hint} /> : null}
       </span>
       {children}
+    </label>
+  )
+}
+
+function TextAreaField(props: {
+  label: string
+  hint?: string
+  rows: number
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+}): React.ReactElement {
+  const { label, hint, rows, value, disabled, onChange } = props
+  return (
+    <label className="ag-field ag-field-block">
+      <span className="ag-field-label">{label}</span>
+      <textarea
+        className="ag-textarea"
+        rows={rows}
+        value={value}
+        disabled={disabled}
+        spellCheck={false}
+        onChange={event => onChange(event.target.value)}
+      />
+      {hint === undefined ? null : <span className="ag-field-hint">{hint}</span>}
     </label>
   )
 }
@@ -244,6 +224,101 @@ function EffortField(props: {
   )
 }
 
+function parseReminders(raw: string): number[] {
+  const reminders: number[] = []
+  for (const token of raw.split(',')) {
+    const text = token.trim()
+    if (!/^\d+$/.test(text)) continue
+    const step = Number(text)
+    if (step > 0 && !reminders.includes(step)) reminders.push(step)
+  }
+  return reminders.sort((left, right) => left - right)
+}
+
+function BudgetNumberInput(props: {
+  value: number
+  disabled: boolean
+  ariaLabel: string
+  onChange: (value: number) => void
+}): React.ReactElement {
+  const { value, disabled, ariaLabel, onChange } = props
+  const [text, setText] = useState(() => String(value))
+  const lastEmitted = useRef(value)
+  useEffect(() => {
+    if (lastEmitted.current === value) return
+    lastEmitted.current = value
+    setText(String(value))
+  }, [value])
+  const commit = (raw: string): void => {
+    const next = raw === '' ? 0 : Number(raw)
+    lastEmitted.current = next
+    onChange(next)
+  }
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      autoComplete="off"
+      className="ag-input ag-budget-input"
+      value={text}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={event => {
+        const raw = event.target.value
+        if (!/^\d*$/.test(raw)) return
+        setText(raw)
+        commit(raw)
+      }}
+      onBlur={() => setText(String(value))}
+    />
+  )
+}
+
+function RemindersInput(props: {
+  value: number[]
+  disabled: boolean
+  ariaLabel: string
+  onChange: (value: number[]) => void
+}): React.ReactElement {
+  const { value, disabled, ariaLabel, onChange } = props
+  const [text, setText] = useState(() => value.join(','))
+  const lastEmitted = useRef(value.join(','))
+  useEffect(() => {
+    const next = value.join(',')
+    if (lastEmitted.current === next) return
+    lastEmitted.current = next
+    setText(next)
+  }, [value])
+  const commit = (raw: string): void => {
+    const reminders = parseReminders(raw)
+    lastEmitted.current = reminders.join(',')
+    onChange(reminders)
+  }
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      autoComplete="off"
+      className="ag-input ag-budget-input"
+      value={text}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={event => {
+        const raw = event.target.value
+        if (!/^[\d,\s]*$/.test(raw)) return
+        setText(raw)
+        commit(raw)
+      }}
+      onBlur={() => {
+        const reminders = parseReminders(text)
+        lastEmitted.current = reminders.join(',')
+        setText(reminders.join(','))
+        onChange(reminders)
+      }}
+    />
+  )
+}
+
 function Section({ title, hint, children }: {
   title: string
   hint?: string
@@ -264,9 +339,11 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const { form, t, useLocale } = props
   useLocale()
   const [open, setOpen] = useState(false)
+  const [present, setPresent] = useState(false)
+  const [visible, setVisible] = useState(false)
   const anchor = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
-  const placement = useAnchorPlacement(open, anchor, panel)
+  const wasOpen = useRef(false)
   const { route } = useCurrentRoute(props)
   const fallback = useFallbackConfig(props)
 
@@ -276,6 +353,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
 
   const stored = normalizeGuard(snapshot.value ?? fallback)
   const [draft, setDraft] = useState<GuardConfig | null>(null)
+  const [tab, setTab] = useState<TabKey>('general')
   const [saving, setSaving] = useState(false)
   const [messageKey, setMessageKey] = useState<MessageKey>('')
   const current = draft ?? stored
@@ -283,35 +361,68 @@ function GuardDock(props: PanelProps): React.ReactElement {
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(stored)
 
   useEffect(() => {
-    if (!open) {
-      setDraft(null)
-      setMessageKey('')
+    if (open) {
+      setPresent(true)
+      const frame = window.requestAnimationFrame(() => setVisible(true))
+      return () => window.cancelAnimationFrame(frame)
     }
+    setVisible(false)
+    const timer = window.setTimeout(() => setPresent(false), DRAWER_EXIT_MS)
+    return () => window.clearTimeout(timer)
   }, [open])
 
   useEffect(() => {
-    if (!open) return undefined
-    const onPointerDown = (event: MouseEvent): void => {
-      const target = event.target as Node | null
-      if (target === null) return
-      if (anchor.current?.contains(target) === true) return
-      if (panel.current?.contains(target) === true) return
-      setOpen(false)
+    if (open) {
+      wasOpen.current = true
+      if (visible) panel.current?.focus()
+      return
     }
+    if (wasOpen.current) {
+      wasOpen.current = false
+      anchor.current?.focus()
+    }
+  }, [open, visible])
+
+  useEffect(() => {
+    if (!open) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') setOpen(false)
     }
-    document.addEventListener('mousedown', onPointerDown, true)
     document.addEventListener('keydown', onKeyDown, true)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown, true)
-      document.removeEventListener('keydown', onKeyDown, true)
-    }
+    return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [open])
 
   const patch = (key: keyof GuardConfig, value: unknown): void => {
     setDraft(previous => ({ ...(previous ?? stored), [key]: value }))
     setMessageKey('')
+  }
+
+  const budgetFor = (prefix: string): AgentBudget => current.budgets[prefix] ?? DEFAULT_GUARD.budgets[prefix]
+
+  const patchBudget = (prefix: string, key: keyof AgentBudget, value: number | number[]): void => {
+    setDraft(previous => {
+      const base = previous ?? stored
+      return {
+        ...base,
+        budgets: {
+          ...base.budgets,
+          [prefix]: { ...(base.budgets[prefix] ?? DEFAULT_GUARD.budgets[prefix]), [key]: value },
+        },
+      }
+    })
+    setMessageKey('')
+  }
+
+  const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number): void => {
+    let next = -1
+    if (event.key === 'ArrowRight') next = (index + 1) % TABS.length
+    else if (event.key === 'ArrowLeft') next = (index - 1 + TABS.length) % TABS.length
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = TABS.length - 1
+    if (next < 0) return
+    event.preventDefault()
+    setTab(TABS[next].key)
+    document.getElementById(`ag-tab-${TABS[next].key}`)?.focus()
   }
 
   const save = async (): Promise<void> => {
@@ -321,7 +432,9 @@ function GuardDock(props: PanelProps): React.ReactElement {
     let accepted = true
     for (const key of Object.keys(draft) as (keyof GuardConfig)[]) {
       if (JSON.stringify(draft[key]) === JSON.stringify(stored[key])) continue
-      const ok = await form.set(key, draft[key])
+      const value = draft[key]
+      const clear = TEXT_KEYS.has(key) && typeof value === 'string' && value.trim() === ''
+      const ok = clear ? await form.unset(key) : await form.set(key, value)
       accepted = ok && accepted
     }
     setSaving(false)
@@ -345,24 +458,62 @@ function GuardDock(props: PanelProps): React.ReactElement {
         <span className="ag-dot" />
         {t('trigger')}
       </button>
-      {open
+      {present
         ? createPortal(
-          <div
-            ref={panel}
-            className="ag-panel"
-            data-enabled={current.enabled ? 'true' : 'false'}
-            role="dialog"
-            aria-label={t('dialogAria')}
-            style={placement === null
-              ? { left: 0, top: 0, width: PANEL_WIDTH, visibility: 'hidden' }
-              : { left: placement.left, top: placement.top, maxHeight: placement.maxHeight, width: PANEL_WIDTH }}
-          >
-            <div className="ag-head">
-              <span className="ag-title">agent-guard</span>
-              <span className="ag-state">{current.enabled ? t('stateOn') : t('stateOff')}</span>
-            </div>
+          <>
+            <div
+              className="ag-backdrop"
+              data-open={visible ? 'true' : 'false'}
+              aria-hidden="true"
+              onClick={() => setOpen(false)}
+            />
+            <div
+              ref={panel}
+              className="ag-drawer"
+              data-open={visible ? 'true' : 'false'}
+              data-enabled={current.enabled ? 'true' : 'false'}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t('dialogAria')}
+              tabIndex={-1}
+            >
+              <div className="ag-drawer-head">
+                <span className="ag-title">{t('drawerTitle')}</span>
+                <span className="ag-state">{current.enabled ? t('stateOn') : t('stateOff')}</span>
+                <button
+                  type="button"
+                  className="ag-drawer-close"
+                  aria-label={t('close')}
+                  title={t('close')}
+                  onClick={() => setOpen(false)}
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                </button>
+              </div>
 
-            <div className="ag-body">
+              <div className="ag-tabs" role="tablist" aria-label={t('drawerTitle')}>
+                {TABS.map((item, index) => (
+                  <button
+                    key={item.key}
+                    id={`ag-tab-${item.key}`}
+                    type="button"
+                    role="tab"
+                    className="ag-tab"
+                    aria-selected={tab === item.key}
+                    aria-controls={`ag-panel-${item.key}`}
+                    tabIndex={tab === item.key ? 0 : -1}
+                    data-active={tab === item.key ? 'true' : 'false'}
+                    onClick={() => setTab(item.key)}
+                    onKeyDown={event => onTabKeyDown(event, index)}
+                  >{t(item.label)}</button>
+                ))}
+              </div>
+
+              <div className="ag-drawer-body">
+            {tab === 'general' ? (
+            <div className="ag-tab-panel" role="tabpanel" id="ag-panel-general" aria-labelledby="ag-tab-general">
             <Section title={t('sectionSwitch')}>
               <Field label={t('fieldEnabled')}>
                 <input
@@ -452,36 +603,6 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   <span className="ag-unit">{t('unitCount')}</span>
                 </span>
               </Field>
-              <Field label={t('fieldBudget')}>
-                <span className="ag-number">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="ag-input"
-                    value={current.stepBudget}
-                    disabled={!editable}
-                    onChange={event => patch('stepBudget', Number(event.target.value))}
-                  />
-                  <span className="ag-unit">{t('unitSteps')}</span>
-                </span>
-              </Field>
-              <div className="ag-note">{t('zeroUnlimited')}</div>
-              <Field label={t('fieldFiles')}>
-                <span className="ag-number">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="ag-input"
-                    value={current.maxFilesPerAgent}
-                    disabled={!editable}
-                    onChange={event => patch('maxFilesPerAgent', Number(event.target.value))}
-                  />
-                  <span className="ag-unit">{t('unitFiles')}</span>
-                </span>
-              </Field>
-              <div className="ag-note">{t('zeroUnlimited')}</div>
               <Field label={t('fieldBanSleep')}>
                 <input
                   type="checkbox"
@@ -491,7 +612,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('banSleepPolling', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldLeadExecute')} hint={t('leadExecuteHint')}>
+              <Field label={t('fieldLeadExecute')} hint={t('leadExecuteHint')} labelClassName="ag-lead-no-execute">
                 <input
                   type="checkbox"
                   className="ag-check"
@@ -500,22 +621,101 @@ function GuardDock(props: PanelProps): React.ReactElement {
                   onChange={event => patch('leadNoExecute', event.target.checked)}
                 />
               </Field>
-              <Field label={t('fieldLeadBudget')}>
-                <span className="ag-number">
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="ag-input"
-                    value={current.leadStepBudget}
-                    disabled={!editable}
-                    onChange={event => patch('leadStepBudget', Number(event.target.value))}
-                  />
-                  <span className="ag-unit">{t('unitSteps')}</span>
-                </span>
-              </Field>
-              <div className="ag-note">{t('zeroUnlimited')}</div>
             </Section>
+            </div>
+            ) : tab === 'prompt' ? (
+            <div className="ag-tab-panel" role="tabpanel" id="ag-panel-prompt" aria-labelledby="ag-tab-prompt">
+              <TextAreaField
+                label={t('fieldLeadSchedulingText')}
+                hint={t('leadSchedulingHint')}
+                rows={8}
+                value={current.leadSchedulingText}
+                disabled={!editable}
+                onChange={value => patch('leadSchedulingText', value)}
+              />
+              <TextAreaField
+                label={t('fieldContractText')}
+                hint={t('contractHint')}
+                rows={12}
+                value={current.contractText}
+                disabled={!editable}
+                onChange={value => patch('contractText', value)}
+              />
+              <TextAreaField
+                label={t('fieldLeadReminderText')}
+                hint={t('leadReminderHint')}
+                rows={4}
+                value={current.leadReminderText}
+                disabled={!editable}
+                onChange={value => patch('leadReminderText', value)}
+              />
+              <div className="ag-note ag-note-left ag-prompt-default-hint">{t('promptDefaultHint')}</div>
+            </div>
+            ) : (
+            <div className="ag-tab-panel" role="tabpanel" id="ag-panel-rules" aria-labelledby="ag-tab-rules">
+            <Section title={t('sectionBudgets')} hint={t('budgetsHint')}>
+              <div className="ag-budget-table">
+                <div className="ag-budget-row ag-budget-head">
+                  <span className="ag-budget-prefix">{t('prefixHeader')}</span>
+                  <span>{t('fieldStepBudget')}</span>
+                  <span>{t('fieldReadCalls')}</span>
+                  <span>{t('fieldReadFiles')}</span>
+                  <span>{t('fieldWriteFiles')}</span>
+                  <span>{t('fieldReminders')}</span>
+                </div>
+                {BUDGET_PREFIXES.map(prefix => {
+                  const budget = budgetFor(prefix)
+                  return (
+                    <div className="ag-budget-row" key={prefix}>
+                      <span className="ag-budget-prefix">{prefix}</span>
+                      <BudgetNumberInput
+                        value={budget.stepBudget}
+                        disabled={!editable}
+                        ariaLabel={`${prefix} ${t('fieldStepBudget')}`}
+                        onChange={value => patchBudget(prefix, 'stepBudget', value)}
+                      />
+                      <BudgetNumberInput
+                        value={budget.readCalls}
+                        disabled={!editable}
+                        ariaLabel={`${prefix} ${t('fieldReadCalls')}`}
+                        onChange={value => patchBudget(prefix, 'readCalls', value)}
+                      />
+                      <BudgetNumberInput
+                        value={budget.readFiles}
+                        disabled={!editable}
+                        ariaLabel={`${prefix} ${t('fieldReadFiles')}`}
+                        onChange={value => patchBudget(prefix, 'readFiles', value)}
+                      />
+                      <BudgetNumberInput
+                        value={budget.writeFiles}
+                        disabled={!editable}
+                        ariaLabel={`${prefix} ${t('fieldWriteFiles')}`}
+                        onChange={value => patchBudget(prefix, 'writeFiles', value)}
+                      />
+                      <RemindersInput
+                        value={budget.reminders}
+                        disabled={!editable}
+                        ariaLabel={`${prefix} ${t('fieldReminders')}`}
+                        onChange={value => patchBudget(prefix, 'reminders', value)}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </Section>
+
+            <Section title="Lead">
+              <Field label={t('fieldLeadBudget')} hint={t('zeroUnlimited')}>
+                <BudgetNumberInput
+                  value={current.leadStepBudget}
+                  disabled={!editable}
+                  ariaLabel={t('fieldLeadBudget')}
+                  onChange={value => patch('leadStepBudget', value)}
+                />
+              </Field>
+            </Section>
+            </div>
+            )}
             </div>
 
             <div className="ag-foot">
@@ -531,7 +731,7 @@ function GuardDock(props: PanelProps): React.ReactElement {
               <div className="ag-hint">{t('hint')}</div>
             </div>
 
-            <div className="ag-actions">
+            <div className="ag-drawer-actions">
               <button
                 type="button"
                 className="ag-btn primary"
@@ -550,11 +750,34 @@ function GuardDock(props: PanelProps): React.ReactElement {
               </button>
               <span className="ag-msg">{messageKey === '' ? '' : t(messageKey)}</span>
             </div>
-          </div>,
+            </div>
+          </>,
           document.body
         )
         : null}
     </>
+  )
+}
+
+interface ChildTagProps extends SlotProps {
+  t: Translate
+  useLocale: () => number
+}
+
+function GuardChildTag(props: ChildTagProps): React.ReactElement | null {
+  const { t, useLocale } = props
+  useLocale()
+  const useSession = props.useSession
+  const subagent = typeof useSession === 'function'
+    ? useSession(snapshot => snapshot.subagent ?? null)
+    : null
+  if (subagent === null) return null
+  const mode = subagent.address?.mode
+  return (
+    <span className="ag-child-tag" data-mode={mode} title={t('subagentTagTitle')}>
+      <span className="ag-child-tag-dot" aria-hidden="true" />
+      {t('subagentTag')}
+    </span>
   )
 }
 
@@ -580,5 +803,10 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register(
     { name: 'conversation.input.left', id: NS, order: 40 },
     (props: SlotProps) => <GuardDock {...props} form={form} t={t} useLocale={useLocale} />
+  ))
+
+  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register(
+    { name: 'conversation.input.overlay', id: `${NS}:child`, order: 0 },
+    (props: SlotProps) => <GuardChildTag {...props} t={t} useLocale={useLocale} />
   ))
 }
