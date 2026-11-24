@@ -139,7 +139,6 @@ const DELEGATION_NAME = /^(?=.{1,32}$)(exec|probe)-[a-z0-9-]{1,27}$/
 const CHILD_TOOLS = new Set(['subagent', 'subagent_fork'])
 const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
 const READ_TOOLS = new Set(['read', 'grep', 'glob'])
-const READ_PATH_PLACEHOLDER = '<cwd>'
 const LEAD_BLOCKED_TOOLS = new Set(['read', 'grep', 'glob', 'write', 'edit', 'str_replace_editor'])
 const COORDINATION_TOOLS = new Set([
   'subagent', 'subagent_fork', 'send_message', 'interrupt_agent',
@@ -259,14 +258,22 @@ function agentNameOf(subagents, agent, namesBySession, ctx) {
   return ''
 }
 
-// Only `read` counts toward distinct files: grep/glob may walk whole trees and
-// their `path` is not a file. Resolve the read file_path and lower-case it on
-// Windows so `a.ts`, `.\a.ts` and `A.TS` cannot be counted as three files.
+// Check emptiness before resolve: a missing file_path otherwise becomes cwd and spends read budget.
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') return value
+  }
+  return ''
+}
+
+// win32 lower-casing after resolve keeps a.ts / .\a.ts / A.TS one file.
 function readPathOf(exec) {
   if (exec?.name !== 'read') return undefined
   const args = exec?.arguments
-  const raw = args !== null && typeof args === 'object' ? args.file_path ?? args.filePath : undefined
-  if (typeof raw !== 'string' || raw === '') return READ_PATH_PLACEHOLDER
+  const raw = args !== null && typeof args === 'object'
+    ? firstNonEmptyString(args.file_path, args.filePath, args.path)
+    : ''
+  if (raw === '') return undefined
   try {
     const resolved = path.resolve(raw)
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved
@@ -275,8 +282,17 @@ function readPathOf(exec) {
   }
 }
 
-// Render at most one reminder per step: the highest configured threshold the
-// agent has already reached. Re-rendering every step past it is intentional.
+// Fresh Set: a denied call must not mutate committed counters.
+export function planReadCount(exec, current) {
+  const readPath = readPathOf(exec)
+  if (exec?.name === 'read' && readPath === undefined) return undefined
+  const calls = (current?.calls ?? 0) + 1
+  const files = new Set(current?.files)
+  if (readPath !== undefined) files.add(readPath)
+  return { calls, files }
+}
+
+// Re-rendering the reminder on every step past the threshold is intentional.
 function readReminderFor(ctx, subagents, agent, options, stepCounts, readBySession, namesBySession, text) {
   if (agent === undefined || agent === null) return ''
   if (delegationDepth(agent) < 1) return ''
@@ -361,11 +377,10 @@ function commandOf(exec) {
   return typeof command === 'string' ? command : ''
 }
 
-function filePathOf(exec) {
+export function filePathOf(exec) {
   const args = exec?.arguments
   if (args === null || typeof args !== 'object') return ''
-  const path = args.file_path ?? args.filePath ?? args.path
-  return typeof path === 'string' && path !== '' ? path : ''
+  return firstNonEmptyString(args.file_path, args.filePath, args.path)
 }
 
 function delegationNameOf(exec) {
@@ -675,29 +690,27 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, ledger, refe
     }
   }
 
-  // Read budget: attempt first without committing, so a denied call neither
-  // consumes budget nor reaches the concurrency reservation below. Only child
-  // agents (depth >= 1) are budgeted, like the step and write budgets.
+  // Attempt before committing: a denied call spends no budget and never reaches the
+  // concurrency reservation; only depth >= 1 is budgeted.
   if (budget !== undefined && READ_TOOLS.has(exec.name) && delegationDepth(agent) >= 1) {
     const sessionId = agent.session?.id
     if (sessionId !== undefined) {
       const current = readBySession.get(sessionId)
       const usedCalls = current?.calls ?? 0
       const usedFiles = current?.files?.size ?? 0
-      const calls = usedCalls + 1
-      const files = new Set(current?.files)
-      const readPath = readPathOf(exec)
-      if (readPath !== undefined) files.add(readPath)
-      const overCalls = budget.readCalls > 0 && calls > budget.readCalls
-      const overFiles = budget.readFiles > 0 && files.size > budget.readFiles
-      if (overCalls || overFiles) {
-        ctx.logger.info(
-          '[agent-guard] child %s would exceed the read budget: committed calls %d/%d files %d/%d',
-          String(sessionId).slice(0, 8), usedCalls, budget.readCalls, usedFiles, budget.readFiles,
-        )
-        return text('readBudget', usedCalls, usedFiles, budget.readCalls || '∞', budget.readFiles || '∞')
+      const plan = planReadCount(exec, current)
+      if (plan !== undefined) {
+        const overCalls = budget.readCalls > 0 && plan.calls > budget.readCalls
+        const overFiles = budget.readFiles > 0 && plan.files.size > budget.readFiles
+        if (overCalls || overFiles) {
+          ctx.logger.info(
+            '[agent-guard] child %s would exceed the read budget: committed calls %d/%d files %d/%d',
+            String(sessionId).slice(0, 8), usedCalls, budget.readCalls, usedFiles, budget.readFiles,
+          )
+          return text('readBudget', usedCalls, usedFiles, budget.readCalls || '∞', budget.readFiles || '∞')
+        }
+        readBySession.set(sessionId, plan)
       }
-      readBySession.set(sessionId, { calls, files })
     }
   }
 
