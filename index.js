@@ -25,7 +25,7 @@ export const Config = z.object({
   executeModel: z.string().default('deepseek-flash').volatile(),
   executeReasoningEffort: z.string().default('low').volatile(),
   inheritLeadConfig: z.boolean().default(false).volatile(),
-  maxConcurrentChildren: z.number().step(1).min(0).volatile(),
+  maxConcurrentChildren: z.number().step(1).min(0).default(4).volatile(),
   banSleepPolling: z.boolean().default(true).volatile(),
   budgets: z.dict(z.object({
     stepBudget: z.number().step(1).min(0).default(0),
@@ -35,7 +35,7 @@ export const Config = z.object({
     reminders: z.array(z.number().step(1).min(0)).default([]),
   })).default(DEFAULT_BUDGETS).volatile(),
   leadNoWrite: z.boolean().volatile(),
-  leadNoExecute: z.boolean().volatile(),
+  leadNoExecute: z.boolean().default(true).volatile(),
   leadStepBudget: z.number().step(1).min(0).default(24).volatile(),
   leadSchedulingText: z.string().default(prompts.LEAD_SCHEDULING).volatile(),
   contractText: z.string().default(prompts.CONTRACT).volatile(),
