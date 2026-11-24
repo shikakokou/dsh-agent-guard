@@ -135,9 +135,7 @@ export function normalizeGuard(raw: unknown): GuardConfig {
     budgets: budgets(value.budgets),
     leadNoExecute: typeof value.leadNoExecute === 'boolean'
       ? value.leadNoExecute
-      : typeof value.leadNoWrite === 'boolean'
-        ? value.leadNoWrite
-        : DEFAULT_GUARD.leadNoExecute,
+      : DEFAULT_GUARD.leadNoExecute,
     leadStepBudget: count(value.leadStepBudget, DEFAULT_GUARD.leadStepBudget),
     leadSchedulingText: promptText(value.leadSchedulingText, DEFAULT_GUARD.leadSchedulingText),
     contractText: promptText(value.contractText, DEFAULT_GUARD.contractText),
