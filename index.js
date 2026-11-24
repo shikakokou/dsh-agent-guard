@@ -8,8 +8,6 @@ export const name = 'agent-guard'
 
 export const inject = ['subagents']
 
-// Per-agent-prefix budgets. The table is used only while the `budgets` key is
-// absent; once present, every field is read literally (0 means no limit).
 const DEFAULT_BUDGETS = {
   'probe-': { stepBudget: 20, readCalls: 15, readFiles: 15, writeFiles: 15, reminders: [10] },
   'exec-': { stepBudget: 40, readCalls: 30, readFiles: 20, writeFiles: 20, reminders: [12, 28] },
@@ -97,11 +95,8 @@ const COPY = {
   },
 }
 
-// Runtime-context name and placement for the contract. DSH exposes no exported
-// constant for context orders, only `getContextOrder(name)`; the centrally
-// allocated SUBAGENT_DELEGATION slot is 120 in DSH 0.2.2-rc.5. The fallback is
-// used only when a foreign/older systemPrompt lacks getContextOrder, and keeps
-// the contract after the delegation contexts.
+// No exported context-order constant: SUBAGENT_DELEGATION is 120 in
+// 0.2.2-rc.5; 121 covers older systemPrompt without getContextOrder.
 const CONTRACT_CONTEXT_NAME = 'agent-guard:contract'
 const CONTRACT_CONTEXT_ORDER_FALLBACK = 121
 const BUDGET_CONTEXT_NAME = 'agent-guard:read-budget'
@@ -157,9 +152,6 @@ function countValue(value, fallback) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-// A missing or invalid budget field is 0, which means no limit. This is
-// deliberately not merged with any default: only the whole `budgets` table
-// being absent selects DEFAULT_BUDGETS.
 function budgetCount(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
@@ -243,9 +235,6 @@ function agentNameOf(subagents, agent, namesBySession, ctx) {
       }
     }
   } catch (error) {
-    // Fail open, but not silently: a swallowed error makes probe-/exec-
-    // fall back to no prefix budget at all.
-    // Warn once per process so this cannot flood the log on every tool call.
     if (!nameWarningLogged) {
       nameWarningLogged = true
       ctx?.logger?.warn?.(
@@ -744,9 +733,8 @@ function refusalFor(ctx, exec, options, stepCounts, filesBySession, ledger, refe
     }
   }
 
-  // Reserve last so calls refused above never hold a slot. The reservation is
-  // synchronous, so every pre-execute in one assistant step sees the previous
-  // reservations before any activation has started.
+  // Reserve last: the synchronous reservation is visible to later pre-execute
+  // calls in the same step, and refused calls never hold a slot.
   if (CHILD_TOOLS.has(exec.name)
     && options.maxConcurrentChildren > 0
     && (options.scope === 'all' || isTeamLead(ctx, agent))) {
@@ -831,8 +819,8 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // Carry the exact tool-call token into the tool body so startActivation can
-  // consume the reservation made by this call's pre-execute, not a sibling's.
+  // Carry the exact call token so startActivation consumes this call's
+  // reservation, not a sibling's.
   ctx.on('tools/execute', (exec, next) => {
     if (!CHILD_TOOLS.has(exec.name)) return next()
     return toolCall.run({ token: reservationKey(exec), parentId: exec.agent?.session?.id }, () => next())
@@ -877,7 +865,8 @@ export function apply(ctx, config = {}) {
       for (const referencedPath of extractReferencedPaths(text, cwd)) referenced.add(referencedPath)
     }
   })
-  // agent/pre-step hands back the step's messages and the loop appends them as user/message itself, so the reminder enters here (the turn number keeps it to a turn's first step).
+  // agent/pre-step returns the step's messages, so the reminder enters here; the
+  // turn number limits it to the first step.
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (decision?.kind !== 'enter') return decision
@@ -935,17 +924,14 @@ export function apply(ctx, config = {}) {
     promptCtx.effect(() => promptCtx.systemPrompt.section({
       name: 'lead-scheduling',
       order: 10300,
-      // Reassembled on every model request: only the root (Lead) gets the
-      // scheduling protocol, and only while the guard is enabled. Subagents
-      // never get it. An empty string means DSH drops the section.
+      // Empty text makes DSH drop the section.
       text: ({ agent }) => {
         if (agent === undefined || agent === null) return ''
         if (resolveOptions(config).enabled !== true) return ''
         return delegationDepth(agent) === 0 ? text('leadScheduling') : ''
       },
     }), 'agent-guard.leadScheduling()')
-    // Runtime context, not a section: it is appended after retained history, so
-    // the cached system-prompt prefix stays stable and compaction re-sends it.
+    // Appended after retained history, not as a section, so the cached system-prompt prefix stays stable.
     const systemPrompt = promptCtx.systemPrompt
     try {
       const order = contractContextOrder(systemPrompt)
@@ -953,8 +939,6 @@ export function apply(ctx, config = {}) {
         name: CONTRACT_CONTEXT_NAME,
         order,
         interpolate: false,
-        // The guard contract must survive deployments that disable optional
-        // runtime context; empty text for root still contributes no snapshot.
         required: true,
         text: ({ agent }) => {
           if (agent === undefined || agent === null) return ''
@@ -965,8 +949,6 @@ export function apply(ctx, config = {}) {
     } catch (error) {
       promptCtx.logger?.warn?.('[agent-guard] could not register the subagent contract context: %s', String(error))
     }
-    // Registered in its own try/catch so a contract failure cannot silently
-    // skip the read-budget reminder or mislabel the failing registration.
     try {
       const order = contractContextOrder(systemPrompt)
       promptCtx.effect(() => systemPrompt.context({
@@ -974,8 +956,6 @@ export function apply(ctx, config = {}) {
         order: order + 1,
         interpolate: false,
         required: true,
-        // Only agents whose name matches a prefix budget get a reminder; the
-        // text callback re-reads live counters, so it stays idempotent per step.
         text: ({ agent }) => {
           if (agent === undefined || agent === null) return ''
           const options = resolveOptions(config)
