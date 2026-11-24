@@ -43,7 +43,7 @@ export const DEFAULT_GUARD: GuardConfig = {
   maxConcurrentChildren: 4,
   banSleepPolling: true,
   budgets: {
-    'probe-': { stepBudget: 20, readCalls: 10, readFiles: 5, writeFiles: 5, reminders: [10] },
+    'probe-': { stepBudget: 20, readCalls: 15, readFiles: 15, writeFiles: 15, reminders: [10] },
     'exec-': { stepBudget: 40, readCalls: 30, readFiles: 20, writeFiles: 20, reminders: [12, 28] }
   },
   leadNoExecute: true,

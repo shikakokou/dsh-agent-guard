@@ -11,7 +11,7 @@ export const inject = ['subagents']
 // Per-agent-prefix budgets. The table is used only while the `budgets` key is
 // absent; once present, every field is read literally (0 means no limit).
 const DEFAULT_BUDGETS = {
-  'probe-': { stepBudget: 20, readCalls: 10, readFiles: 5, writeFiles: 5, reminders: [10] },
+  'probe-': { stepBudget: 20, readCalls: 15, readFiles: 15, writeFiles: 15, reminders: [10] },
   'exec-': { stepBudget: 40, readCalls: 30, readFiles: 20, writeFiles: 20, reminders: [12, 28] },
 }
 
